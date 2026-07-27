@@ -1,0 +1,13 @@
+[package]
+name = "aurum-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Aurum CLI module: command-line interface. Useful for tools, asset processors, and server-side use cases."
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+aurum-core = { path = "../aurum-core" }

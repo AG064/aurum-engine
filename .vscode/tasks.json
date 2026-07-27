@@ -1,0 +1,92 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "aurum: build (release)",
+      "type": "shell",
+      "command": "pwsh",
+      "args": ["-NoProfile", "-File", "scripts/build.ps1"],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "aurum: build (debug)",
+      "type": "shell",
+      "command": "pwsh",
+      "args": ["-NoProfile", "-File", "scripts/build.ps1", "-DebugBuild"],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "aurum: test",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["test", "--workspace"],
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "aurum: dev (watch + rebuild)",
+      "type": "shell",
+      "command": "pwsh",
+      "args": ["-NoProfile", "-File", "scripts/dev.ps1"],
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "aurum: run demo",
+      "type": "shell",
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-File",
+        "scripts/build.ps1",
+        "-Run"
+      ],
+      "dependsOn": ["aurum: build (release)"],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "aurum: open editor",
+      "type": "shell",
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-File",
+        "scripts/build.ps1",
+        "-Run",
+        "-Editor"
+      ],
+      "dependsOn": ["aurum: build (release)"],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": ["$rustc"]
+    }
+  ]
+}

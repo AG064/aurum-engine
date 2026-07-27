@@ -1,0 +1,13 @@
+[package]
+name = "aurum-vr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Aurum VR module: OpenXR rig, controllers, comfort options. Stub."
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+aurum-core = { path = "../aurum-core" }

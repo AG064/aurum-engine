@@ -1,0 +1,14 @@
+[configuration]
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = "4.6"
+
+[libraries]
+windows.debug.x86_64 = "res://addons/aurum/bin/aurum_godot.dll"
+windows.release.x86_64 = "res://addons/aurum/bin/aurum_godot.dll"
+linux.debug.x86_64 = "res://addons/aurum/bin/libaurum_godot.so"
+linux.release.x86_64 = "res://addons/aurum/bin/libaurum_godot.so"
+macos.debug = "res://addons/aurum/bin/libaurum_godot.framework"
+macos.release = "res://addons/aurum/bin/libaurum_godot.framework"
+
+[icons]
+Mavis = "res://addons/aurum/icons/mavis.svg"

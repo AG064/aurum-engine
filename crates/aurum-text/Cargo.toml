@@ -1,0 +1,13 @@
+[package]
+name = "aurum-text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Aurum text module: print-driven, no rendering. Useful for text adventures and AI training environments."
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+aurum-core = { path = "../aurum-core" }

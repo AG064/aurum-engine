@@ -1,0 +1,44 @@
+# Rust build output
+/target/
+**/target/
+Cargo.lock.bak
+
+# IDE / editor
+.idea/
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+*.iml
+*.swp
+*.swo
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Godot project artifacts
+**/.godot/
+**/*.import
+**/*.translation
+**/bin/*.dll
+**/bin/*.so
+**/bin/*.dylib
+**/bin/*.tmp
+**/bin/*~*
+
+# Local build outputs
+*.dll.local
+*.so.local
+*.dylib.local
+**/lib/*.tmp
+
+# Logs
+*.log
+logs/
+
+# Environment / secrets (defensive — none expected in this repo, but in case)
+.env
+.env.local
+*.pem
+*.key

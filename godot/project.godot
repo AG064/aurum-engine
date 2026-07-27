@@ -1,0 +1,44 @@
+; Engine configuration file.
+; Aurum — modular game engine foundation built on Godot 4.7.
+;
+; This project is the shared add-on and demo hub. Per-game projects live
+; in subdirectories of this folder (see templates/ and demos/).
+
+config_version=5
+
+[application]
+
+config/name="Aurum"
+config/description="Modular game engine foundation built on Godot 4.7 + Rust."
+run/main_scene="res://demos/2d_squares/scenes/main.tscn"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+config/icon="res://shared/icon.svg"
+
+[autoload]
+
+Aurum="*res://scripts/aurum_runtime.gd"
+
+[display]
+
+window/size/window_width_override=1280
+window/size/window_height_override=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/aurum/plugin.cfg")
+
+[gui]
+
+theme/default_font_multichannel_signed_distance_field=true
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
+
+[rendering]
+
+rendering_device/driver.windows="d3d12"
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"

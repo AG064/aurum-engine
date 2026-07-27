@@ -1,0 +1,17 @@
+[package]
+name = "aurum-godot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Aurum Godot shim: GDExtension that exposes the engine to GDScript."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+aurum-core = { path = "../aurum-core" }
+godot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

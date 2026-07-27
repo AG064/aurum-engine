@@ -1,0 +1,16 @@
+[package]
+name = "aurum-vn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Aurum VN module: story interpreter, dialogue, choices, variables, save/load. Port of the original VNEngine."
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+aurum-core = { path = "../aurum-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

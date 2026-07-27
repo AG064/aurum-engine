@@ -1,0 +1,33 @@
+# Normalize line endings to LF on commit, native on checkout.
+* text=auto eol=lf
+
+# Rust files should always be LF
+*.rs text eol=lf
+*.toml text eol=lf
+
+# GDScript / scenes
+*.gd text eol=lf
+*.tscn text eol=lf
+*.gdshader text eol=lf
+
+# Documentation
+*.md text eol=lf
+
+# PowerShell / shell scripts
+*.ps1 text eol=lf
+*.sh text eol=lf
+
+# Windows-only scripts that need CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary / lock files (no line-ending conversion)
+*.lock binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.png binary
+*.jpg binary
+*.svg binary
+*.ico binary
+*.godot binary

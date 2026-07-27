@@ -1,0 +1,15 @@
+[package]
+name = "aurum-2d"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Aurum 2D module: sprites, tiles, 2D physics, ECS components for 2D games."
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+aurum-core = { path = "../aurum-core" }
+godot = { workspace = true }
+serde = { workspace = true }

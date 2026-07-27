@@ -1,0 +1,59 @@
+[gd_scene load_steps=6 format=3 uid="uid://b1aurum3dmain0001"]
+
+[ext_resource type="Script" path="res://demos/3d_bounce/scripts/main_3d.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/aurum_3d_kinematics.gd" id="2_kin"]
+[ext_resource type="Script" path="res://scripts/aurum_dev_console.gd" id="3_console"]
+
+[sub_resource type="BoxMesh" id="PlayerMesh"]
+size = Vector3(1, 1, 1)
+
+[sub_resource type="BoxMesh" id="TargetMesh"]
+size = Vector3(0.8, 0.8, 0.8)
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866025, -0.25, 0.433013, 0, 0.866025, 0.5, -0.5, -0.433013, 0.75, 0, 8, 0)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="Floor" type="StaticBody3D" parent="."]
+
+[node name="FloorMesh" type="MeshInstance3D" parent="Floor"]
+transform = Transform3D(20, 0, 0, 0, 0.1, 0, 0, 0, 20, 0, -0.05, 0)
+
+[node name="FloorCollider" type="CollisionShape3D" parent="Floor"]
+transform = Transform3D(20, 0, 0, 0, 0.1, 0, 0, 0, 20, 0, -0.05, 0)
+
+[node name="PlayerSpawn" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+
+[node name="TargetSpawn" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 3, 0)
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.5, 0.866025, 0, -0.866025, 0.5, 0, 8, 12)
+fov = 60.0
+
+[node name="Kinematics" type="Node3D" parent="." groups=["aurum_kinematics_3d"]]
+script = ExtResource("2_kin")
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="Label" type="Label" parent="HUD"]
+offset_left = 16.0
+offset_top = 12.0
+offset_right = 600.0
+offset_bottom = 100.0
+text = "Score: 0
+
+WASD to move, Space to jump.
+F1 for dev console."
+theme_override_font_sizes/font_size = 16
+theme_override_colors/font_color = Color(0.95, 0.94, 0.9, 1)
+
+[node name="DevConsole" type="CanvasLayer" parent="."]
+script = ExtResource("3_console")
