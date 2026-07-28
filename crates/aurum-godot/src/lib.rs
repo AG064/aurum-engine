@@ -51,6 +51,7 @@ use godot::prelude::*;
 use aurum_core::ecs::World;
 use aurum_core::events::EventBus;
 use aurum_core::state::{State, StateValue};
+use aurum_vn::{Event as StoryEvent, Interpreter, Story, VarValue};
 
 use bridge::{json_to_variant, variant_to_json};
 
@@ -85,6 +86,8 @@ pub struct Mavis {
     pub(crate) time_scale: f32,
     /// Registered module names.
     pub(crate) modules: Vec<String>,
+    /// Story interpreter (set by `story_load`; None until a story is loaded).
+    pub(crate) story: Option<Interpreter>,
 }
 
 #[godot_api]
@@ -100,6 +103,7 @@ impl INode for Mavis {
             state: State::new(),
             time_scale: 1.0,
             modules: Vec::new(),
+            story: None,
         }
     }
 }
@@ -417,6 +421,224 @@ impl Mavis {
     fn has_module(&self, name: String) -> bool {
         self.modules.contains(&name)
     }
+
+    // ===== Story (visual novel) =====
+
+    /// Load a story from JSON. The story becomes the active story;
+    /// subsequent `story_advance` calls return entries from it.
+    /// Returns "" on success, an error message on failure.
+    #[func]
+    fn story_load(&mut self, json: GString, start_scene: GString) -> GString {
+        let story = match Story::from_json(&json.to_string()) {
+            Ok(s) => s,
+            Err(e) => return GString::from(format!("{:?}", e).as_str()),
+        };
+        match Interpreter::new(story, &start_scene.to_string()) {
+            Ok(interp) => {
+                self.story = Some(interp);
+                GString::new()
+            }
+            Err(e) => GString::from(format!("{:?}", e).as_str()),
+        }
+    }
+
+    /// Check whether a story is currently loaded.
+    #[func]
+    fn story_is_loaded(&self) -> bool {
+        self.story.is_some()
+    }
+
+    /// Advance the story and return the next event as a Dictionary.
+    ///
+    /// Shapes:
+    /// - `{"type": "dialogue", "speaker": ..., "text": ..., "presentation": ..., ...}`
+    /// - `{"type": "choice", "entry_index": ..., "choices": [{"text": ..., "goto": ...}]}`
+    /// - `{"type": "scene_ended"}` / `"quit"` / `"goto"` / `"command"` / `"error"`
+    #[func]
+    fn story_advance(&mut self) -> Dictionary<GString, Variant> {
+        let Some(interp) = self.story.as_mut() else {
+            let msg = GString::from("No story loaded");
+            return story_event_dict("error", &[("message", msg.to_variant())]);
+        };
+        match interp.advance() {
+            StoryEvent::Dialogue {
+                speaker,
+                text,
+                character,
+                position,
+                background,
+                emotion,
+                presentation,
+                text_key,
+                speaker_key,
+                append,
+            } => {
+                let mut pairs: Vec<(&str, Variant)> = vec![
+                    ("type", "dialogue".to_variant()),
+                    ("text", text.to_variant()),
+                    ("presentation", presentation.to_variant()),
+                    ("append", append.to_variant()),
+                    ("character", character.to_variant()),
+                    ("position", position.to_variant()),
+                    ("background", background.to_variant()),
+                    ("emotion", emotion.to_variant()),
+                    ("text_key", text_key.to_variant()),
+                    ("speaker_key", speaker_key.to_variant()),
+                ];
+                if let Some(s) = speaker {
+                    pairs.push(("speaker", s.to_variant()));
+                } else {
+                    pairs.push(("speaker", Variant::nil()));
+                }
+                story_event_dict_from_pairs(&pairs)
+            }
+            StoryEvent::Choice { entry_index, choices } => {
+                let mut arr = VarArray::new();
+                for c in choices {
+                    let mut d = Dictionary::<GString, Variant>::new();
+                    d.set("text", c.text);
+                    d.set("goto", c.goto);
+                    d.set("text_key", c.text_key);
+                    let _ = arr.push(&d.to_variant());
+                }
+                let pairs: Vec<(&str, Variant)> = vec![
+                    ("type", "choice".to_variant()),
+                    ("entry_index", (entry_index as i64).to_variant()),
+                    ("choices", arr.to_variant()),
+                ];
+                story_event_dict_from_pairs(&pairs)
+            }
+            StoryEvent::SceneEnded => story_event_dict("scene_ended", &[]),
+            StoryEvent::Quit => story_event_dict("quit", &[]),
+            StoryEvent::Goto(target) => {
+                let t = GString::from(target.as_str());
+                story_event_dict("goto", &[("target", t.to_variant())])
+            }
+            StoryEvent::Command(cmd) => {
+                let v = json_to_variant(&cmd);
+                let d = match v.try_to::<Dictionary<GString, Variant>>() {
+                    Ok(d) => d,
+                    Err(_) => Dictionary::new(),
+                };
+                let pairs: Vec<(&str, Variant)> = vec![
+                    ("type", "command".to_variant()),
+                    ("command", d.to_variant()),
+                ];
+                story_event_dict_from_pairs(&pairs)
+            }
+            StoryEvent::Error(msg) => {
+                let m = GString::from(msg.as_str());
+                story_event_dict("error", &[("message", m.to_variant())])
+            }
+        }
+    }
+
+    /// Apply a choice (by visible index from the most recent Choice event).
+    /// Returns "" on success, an error message on failure.
+    #[func]
+    fn story_pick_choice(&mut self, index: i64) -> GString {
+        let Some(interp) = self.story.as_mut() else {
+            return GString::from("No story loaded");
+        };
+        let idx = match usize::try_from(index) {
+            Ok(i) => i,
+            Err(_) => return GString::from("Choice index cannot be negative"),
+        };
+        match interp.pick_choice(idx) {
+            Ok(()) => GString::new(),
+            Err(e) => GString::from(format!("{:?}", e).as_str()),
+        }
+    }
+
+    /// Jump to a target. The target can be a scene name, a scene name with
+    /// a label (`scene:label`), or a label in the current scene (`.label`).
+    /// Returns "" on success, an error message on failure.
+    #[func]
+    fn story_jump_to(&mut self, target: GString) -> GString {
+        let Some(interp) = self.story.as_mut() else {
+            return GString::from("No story loaded");
+        };
+        match interp.jump_to(&target.to_string()) {
+            Ok(()) => GString::new(),
+            Err(e) => GString::from(format!("{:?}", e).as_str()),
+        }
+    }
+
+    /// Get a story variable. Returns the default if not set or the type
+    /// doesn't match.
+    #[func]
+    fn story_get_variable(&self, key: GString, default: Variant) -> Variant {
+        let Some(interp) = self.story.as_ref() else {
+            return default;
+        };
+        match interp.state().variables.get(&key.to_string()) {
+            Some(VarValue::Bool(b)) => b.to_variant(),
+            Some(VarValue::Number(n)) => n.to_variant(),
+            Some(VarValue::String(s)) => s.to_variant(),
+            None => default,
+        }
+    }
+
+    /// Set a story variable. The value must be bool, int, float, or string.
+    /// Returns true on success.
+    #[func]
+    fn story_set_variable(&mut self, key: GString, value: Variant) -> bool {
+        let Some(interp) = self.story.as_mut() else {
+            return false;
+        };
+        let sv = if let Ok(b) = value.try_to::<bool>() {
+            VarValue::Bool(b)
+        } else if let Ok(i) = value.try_to::<i64>() {
+            VarValue::Number(i as f64)
+        } else if let Ok(f) = value.try_to::<f64>() {
+            VarValue::Number(f)
+        } else if let Ok(s) = value.try_to::<GString>() {
+            VarValue::String(s.to_string())
+        } else {
+            return false;
+        };
+        interp.state_mut().variables.insert(key.to_string(), sv);
+        true
+    }
+
+    /// Export the story state as JSON for save files.
+    #[func]
+    fn story_export_state(&self) -> GString {
+        match self.story.as_ref() {
+            Some(interp) => GString::from(interp.export_state().as_str()),
+            None => GString::new(),
+        }
+    }
+
+    /// Import story state from JSON. Returns true on success.
+    #[func]
+    fn story_import_state(&mut self, json: GString) -> bool {
+        match self.story.as_mut() {
+            Some(interp) => interp.import_state(&json.to_string()),
+            None => false,
+        }
+    }
+
+    /// Current scene name, or "" if no story is loaded.
+    #[func]
+    fn story_current_scene(&self) -> GString {
+        match self.story.as_ref() {
+            Some(interp) => {
+                let s = interp.state().current_scene.clone();
+                GString::from(s.as_str())
+            }
+            None => GString::new(),
+        }
+    }
+
+    /// Current entry index (0-based), or -1 if no story is loaded.
+    #[func]
+    fn story_current_entry_index(&self) -> i32 {
+        match self.story.as_ref() {
+            Some(interp) => interp.state().current_entry_index,
+            None => -1,
+        }
+    }
 }
 
 // --- Internal: dynamic event, flush, conversions ---
@@ -495,4 +717,24 @@ fn components_to_json(
         out.insert(entity.to_string(), serde_json::Value::Object(inner));
     }
     serde_json::Value::Object(out)
+}
+
+// Story event helpers — build Dictionary payloads for `story_advance`.
+
+fn story_event_dict(type_name: &str, extras: &[(&str, Variant)]) -> Dictionary<GString, Variant> {
+    let mut pairs: Vec<(&str, Variant)> =
+        vec![("type", GString::from(type_name).to_variant())];
+    pairs.extend_from_slice(extras);
+    story_event_dict_from_pairs(&pairs)
+}
+
+fn story_event_dict_from_pairs(
+    pairs: &[(&str, Variant)],
+) -> Dictionary<GString, Variant> {
+    let mut d = Dictionary::<GString, Variant>::new();
+    for (k, v) in pairs {
+        let key_gs = GString::from(*k);
+        d.set(&key_gs, v);
+    }
+    d
 }

@@ -55,20 +55,30 @@ entity, a 3D kinematics node, and a camera controller.
 
 ## `aurum-vn` — visual novels
 
-In progress. The Rust side has:
+The full VN module: Rust interpreter + GDScript shim + a working demo.
+
+Rust side (in `aurum-vn`):
 
 - `Story` — parsed story with scenes, variables, entries.
 - `Interpreter` — advances a cursor, emitting `Event`s
   (Dialogue, Choice, Quit, Goto, Command, Error).
 - `Event` and `ChoiceData` — typed payloads.
 
-Not yet written:
+GDScript shim (exposed via the `Mavis` class, wrapped by `Aurum`):
 
-- GDScript shim that exposes `Aurum.story.load(path)`, `.start(scene)`,
-  `.advance()`, `.pick_choice(i)`, `.save()`, `.load(json)`.
-- HUD template.
-- The `godot/vn/` project is the existing reference; the new
-  `aurum-vn` add-on is a drop-in replacement.
+- `Aurum.story_load(json, start_scene)` — load and start.
+- `Aurum.story_advance()` — get the next event as a Dictionary.
+- `Aurum.story_pick_choice(i)` — apply a choice (visible index).
+- `Aurum.story_jump_to(target)` — jump to a scene or label.
+- `Aurum.story_get_variable(key, default)` / `set_variable(key, value)`.
+- `Aurum.story_export_state()` / `import_state(json)` — save/load.
+- `Aurum.story_current_scene()` / `current_entry_index()` — cursor.
+
+A working minimal demo is at `godot/aurum/demos/vn_minimal/`. It shows
+the API surface, supports a 3-way choice, and demonstrates variable
+state. The demo's `stories/demo.json` is the story format the original
+`godot/vn/` engine used — the same format is supported, so existing
+stories can be copied over.
 
 ## `aurum-vr` — XR/VR (stub)
 

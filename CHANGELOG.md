@@ -10,6 +10,18 @@ The first public release. Foundation only — no API stability promises yet.
 
 ### Added
 
+- **`aurum-vn` GDScript shim** — the Rust `Interpreter` is now reachable
+  from GDScript via `Aurum.story_load`, `Aurum.story_advance`,
+  `Aurum.story_pick_choice`, `Aurum.story_jump_to`,
+  `Aurum.story_get_variable`, `Aurum.story_set_variable`,
+  `Aurum.story_export_state`, `Aurum.story_import_state`,
+  `Aurum.story_current_scene`, `Aurum.story_current_entry_index`.
+  Events come back as Dictionaries.
+- **VN demo** at `godot/aurum/demos/vn_minimal/` — a minimal port of
+  the original VN (`godot/vn/`) that uses `aurum-vn` instead of the
+  old `regular_vn` add-on. Dialogue, choices, save/load state, no
+  localization or transitions.
+
 - **`aurum-core`** — pure Rust engine core.
   - `ecs` module: entities, components, systems, resources.
   - `events` module: typed event bus with subscribe/emit/dispatch.

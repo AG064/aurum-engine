@@ -41,6 +41,7 @@ name = "aurum-godot"
 version = "0.1.0"
 dependencies = [
  "aurum-core",
+ "aurum-vn",
  "godot",
  "serde",
  "serde_json",

@@ -67,6 +67,79 @@ func list_modules() -> Array:
 	return _engine.list_modules()
 
 
+# ===== Story (visual novel) =====
+
+# The story engine lives in the Rust `aurum-vn` crate. GDScript code
+# interacts with it through these methods. Story events are returned
+# as Dictionaries; see the docs for the shape of each event.
+
+func story_load(json: String, start_scene: String = "start") -> String:
+	if _engine == null:
+		return "Engine not loaded"
+	Aurum.register_module("vn")
+	return _engine.story_load(json, start_scene)
+
+
+func story_is_loaded() -> bool:
+	if _engine == null:
+		return false
+	return _engine.story_is_loaded()
+
+
+func story_advance() -> Dictionary:
+	if _engine == null:
+		return {"type": "error", "message": "Engine not loaded"}
+	return _engine.story_advance()
+
+
+func story_pick_choice(index: int) -> String:
+	if _engine == null:
+		return "Engine not loaded"
+	return _engine.story_pick_choice(index)
+
+
+func story_jump_to(target: String) -> String:
+	if _engine == null:
+		return "Engine not loaded"
+	return _engine.story_jump_to(target)
+
+
+func story_get_variable(key: String, default: Variant = null) -> Variant:
+	if _engine == null:
+		return default
+	return _engine.story_get_variable(key, default)
+
+
+func story_set_variable(key: String, value: Variant) -> bool:
+	if _engine == null:
+		return false
+	return _engine.story_set_variable(key, value)
+
+
+func story_export_state() -> String:
+	if _engine == null:
+		return ""
+	return _engine.story_export_state()
+
+
+func story_import_state(json: String) -> bool:
+	if _engine == null:
+		return false
+	return _engine.story_import_state(json)
+
+
+func story_current_scene() -> String:
+	if _engine == null:
+		return ""
+	return _engine.story_current_scene()
+
+
+func story_current_entry_index() -> int:
+	if _engine == null:
+		return -1
+	return _engine.story_current_entry_index()
+
+
 # ===== Entity API =====
 
 func spawn() -> int:

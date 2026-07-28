@@ -90,6 +90,12 @@ impl Interpreter {
         &self.state
     }
 
+    /// Mutable access to the interpreter state. Useful for set operations
+    /// that need to mutate variables directly.
+    pub fn state_mut(&mut self) -> &mut InterpreterState {
+        &mut self.state
+    }
+
     /// Advance one step. Returns the event the caller should act on.
     pub fn advance(&mut self) -> Event {
         self.advance_with_limit(10_000)
@@ -316,6 +322,43 @@ impl Interpreter {
             "variables": self.state.variables,
         });
         serde_json::to_string(&payload).unwrap_or_default()
+    }
+
+    /// Import state from JSON. Replaces the current scene cursor and
+    /// variables. Returns true on success.
+    pub fn import_state(&mut self, json: &str) -> bool {
+        let value: serde_json::Value = match serde_json::from_str(json) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        let Some(obj) = value.as_object() else {
+            return false;
+        };
+        if let Some(s) = obj.get("current_scene").and_then(|v| v.as_str()) {
+            self.state.current_scene = s.to_string();
+        }
+        if let Some(idx) = obj.get("current_entry_index").and_then(|v| v.as_i64()) {
+            if let Ok(i) = i32::try_from(idx) {
+                self.state.current_entry_index = i;
+            }
+        }
+        if let Some(vars) = obj.get("variables").and_then(|v| v.as_object()) {
+            self.state.variables.clear();
+            for (k, v) in vars {
+                let value = match v {
+                    serde_json::Value::Bool(b) => VarValue::Bool(*b),
+                    serde_json::Value::Number(n) => {
+                        VarValue::Number(n.as_f64().unwrap_or(0.0))
+                    }
+                    serde_json::Value::String(s) => VarValue::String(s.clone()),
+                    _ => continue,
+                };
+                self.state.variables.insert(k.clone(), value);
+            }
+        }
+        self.state.pending_choice_entry = None;
+        self.state.pending_choice_indices.clear();
+        true
     }
 }
 

@@ -20,12 +20,13 @@ and scenes are unchanged — only the Rust crate boundary is slower.
 - **`aurum-2d`** — 2D components (Position2D, Velocity2D, AABB) +
   AABB collision math + kinematic step. **Working 2D demo.**
 - **`aurum-3d`** — 3D components and kinematic step. **Working 3D demo.**
-- **`aurum-vn`** — story interpreter (port of the original `VNEngine`).
-  In progress; the Rust side is complete, the GDScript shim is next.
+- **`aurum-vn`** — story interpreter with full GDScript shim
+  (`Aurum.story_*`). Includes a minimal visual novel demo that ports
+  the original `godot/vn/` story format onto the new engine.
 - **`aurum-vr`** / **`aurum-text`** / **`aurum-cli`** — stubs for
   VR, text-only, and CLI tool genres.
 - **`godot/aurum/`** — Godot project with the add-on, a dev console,
-  and working 2D and 3D demos.
+  and working 2D, 3D, and VN demos.
 
 ## Quick start
 
@@ -73,7 +74,8 @@ aurum/                         # Cargo workspace root
 │   ├── templates/             # starter projects per genre
 │   └── demos/
 │       ├── 2d_squares/        # the 2D demo
-│       └── 3d_bounce/         # the 3D demo
+│       ├── 3d_bounce/         # the 3D demo
+│       └── vn_minimal/        # the visual novel demo
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 └── LICENSE
