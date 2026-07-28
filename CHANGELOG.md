@@ -10,6 +10,18 @@ The first public release. Foundation only — no API stability promises yet.
 
 ### Added
 
+- **life_evolution demo** — the user's emergent-universe simulation
+  (originally at `C:\Game_Development\life_evolution\`) is now a
+  demo of the Aurum project. The Rust GDExtension (glam, rand, rayon,
+  parking_lot, crossbeam-channel) builds alongside the engine via
+  the same `pwsh scripts/build.ps1` command. The GDScript, scenes,
+  and shaders are preserved verbatim. The main project now uses
+  Forward Plus (required for the particle compute shaders).
+  Original `project.godot` and the inner sub-project structure were
+  collapsed into the Aurum project.
+
+### Added
+
 - **`aurum-vn` GDScript shim** — the Rust `Interpreter` is now reachable
   from GDScript via `Aurum.story_load`, `Aurum.story_advance`,
   `Aurum.story_pick_choice`, `Aurum.story_jump_to`,

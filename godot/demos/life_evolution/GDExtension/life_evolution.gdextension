@@ -1,0 +1,14 @@
+[configuration]
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = "4.6"
+
+[libraries]
+
+windows.debug.x86_64   = "res://demos/life_evolution/GDExtension/rust/target/release/life_evolution.dll"
+windows.release.x86_64 = "res://demos/life_evolution/GDExtension/rust/target/release/life_evolution.dll"
+linux.debug.x86_64     = "res://demos/life_evolution/GDExtension/rust/target/release/life_evolution.dll"
+linux.release.x86_64   = "res://demos/life_evolution/GDExtension/rust/target/release/life_evolution.dll"
+macos.debug            = "res://demos/life_evolution/GDExtension/rust/target/release/life_evolution.dll"
+macos.release          = "res://demos/life_evolution/GDExtension/rust/target/release/life_evolution.dll"
+
+[icons]

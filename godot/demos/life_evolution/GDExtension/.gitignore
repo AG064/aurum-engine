@@ -1,0 +1,7 @@
+# Rust build artifacts (the GDExtension target/ folder).
+# The manifest points directly at target/{debug,release}/, so we don't
+# copy anywhere — the build script just runs `cargo build`.
+target/
+
+# Local Godot project cache
+.godot/

@@ -1,17 +1,20 @@
 ; Engine configuration file.
 ; Aurum — modular game engine foundation built on Godot 4.7.
 ;
-; This project is the shared add-on and demo hub. Per-game projects live
-; in subdirectories of this folder (see templates/ and demos/).
+; This project hosts the engine add-on plus a set of demos (2D squares,
+; 3D bounce, minimal VN, and the full life_evolution simulation).
+; The life_evolution demo uses GPU compute shaders, so the renderer is
+; Forward Plus. The other demos (2D, 3D, VN) work fine under Forward
+; Plus too — none of them use features exclusive to GL Compatibility.
 
 config_version=5
 
 [application]
 
 config/name="Aurum"
-config/description="Modular game engine foundation built on Godot 4.7 + Rust."
-run/main_scene="res://demos/vn_minimal/scenes/main.tscn"
-config/features=PackedStringArray("4.7", "GL Compatibility")
+config/description="Modular game engine foundation built on Godot 4.7 + Rust. Demos: 2D squares, 3D bounce, visual novel, life_evolution simulation."
+run/main_scene="res://demos/2d_squares/scenes/main.tscn"
+config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://shared/icon.svg"
 
 [autoload]
@@ -33,12 +36,49 @@ enabled=PackedStringArray("res://addons/aurum/plugin.cfg")
 
 theme/default_font_multichannel_signed_distance_field=true
 
+[input]
+
+; life_evolution input map (preserved from the original project)
+time_accelerate={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":69,"key_label":0,"unicode":101,"location":0,"echo":false,"script":null)
+]
+}
+time_decelerate={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":81,"key_label":0,"unicode":113,"location":0,"echo":false,"script":null)
+]
+}
+toggle_pause={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":32,"key_label":0,"unicode":32,"location":0,"echo":false,"script":null)
+]
+}
+focus_heaviest={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":70,"key_label":0,"unicode":102,"location":0,"echo":false,"script":null)
+]
+}
+reset_simulation={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":82,"key_label":0,"unicode":113,"location":0,"echo":false,"script":null)
+]
+}
+toggle_ui={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194306,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+]
+}
+
 [physics]
 
 3d/physics_engine="Jolt Physics"
 
 [rendering]
 
+textures/vram_compression/import_etc2_astc=true
+anti_aliasing/quality/msaa_3d=3
+environment/defaults/default_clear_color=Color(0, 0, 0.05, 1)
 rendering_device/driver.windows="d3d12"
-renderer/rendering_method="gl_compatibility"
-renderer/rendering_method.mobile="gl_compatibility"
+renderer/rendering_method="forward_plus"
+renderer/rendering_method.mobile="forward_plus"

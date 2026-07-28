@@ -1,12 +1,20 @@
 # Aurum build script.
 #
 # Builds the Rust workspace in release mode (or debug), copies the
-# GDExtension DLL into the Godot project's add-on bin/, runs the test
+# GDExtension DLLs into the Godot project's add-on bin/, runs the test
 # suite (release mode only), and optionally launches Godot.
 #
+# Two GDExtensions are built:
+#   1. `aurum-godot` — the main engine shim. Goes to addons/aurum/bin/.
+#   2. `life_evolution` — the GPU simulation core. Lives in
+#      godot/demos/life_evolution/GDExtension/ and has its own Rust
+#      crate. We build it from outside the workspace because it has
+#      its own dependencies and a separate target/ directory.
+#
 # Usage:
-#   pwsh scripts/build.ps1                       # release + copy DLL + tests
+#   pwsh scripts/build.ps1                       # release + copy DLLs + tests
 #   pwsh scripts/build.ps1 -DebugBuild           # debug, skip tests
+#   pwsh scripts/build.ps1 -NoLife               # skip the life_evolution build
 #   pwsh scripts/build.ps1 -Run                  # build then run the demo
 #   pwsh scripts/build.ps1 -Run -Editor         # build then open editor
 #   pwsh scripts/build.ps1 -NoTests              # skip tests
@@ -17,6 +25,7 @@
 [CmdletBinding()]
 param(
     [switch]$DebugBuild,
+    [switch]$NoLife,
     [switch]$Run,
     [switch]$Editor,
     [switch]$NoTests,
@@ -28,9 +37,6 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-# Resolve paths: defaults assume the standard layout where the Godot
-# project lives at `<workspace>/godot/`. Override with -GodotProject
-# if you've moved it.
 if (-not $Workspace) {
     $Workspace = Resolve-Path (Join-Path $PSScriptRoot "..")
 } else {
@@ -43,12 +49,14 @@ if (-not $GodotBinary) {
     $GodotBinary = "C:\Game_Development\godot\Godot_v4.7-stable_win64.exe"
 }
 if (-not (Test-Path $GodotBinary)) {
-    # Fallback: look in $GodotProject/../godot/
     $Alt = Join-Path (Split-Path (Split-Path $GodotProject -Parent) -Parent) "godot\Godot_v4.7-stable_win64.exe"
     if (Test-Path $Alt) { $GodotBinary = $Alt }
 }
 
 $AddOnBin = Join-Path $GodotProject "addons\aurum\bin"
+$LifeExtDir = Join-Path $GodotProject "demos\life_evolution\GDExtension"
+$LifeCrate = Join-Path $LifeExtDir "rust"
+
 if ($DebugBuild) {
     $Profile = "debug"
     $CargoArgs = @("build", "-p", "aurum-godot")
@@ -62,21 +70,22 @@ Write-Host "    Workspace:    $Workspace"
 Write-Host "    Godot project: $GodotProject"
 Write-Host "    Godot binary:  $GodotBinary"
 Write-Host "    Add-on bin:    $AddOnBin"
+Write-Host "    Life ext dir:  $LifeExtDir"
 Write-Host ""
 
-# Run cargo build
+# ---------- 1. Build aurum-godot ----------
+
 Push-Location $Workspace
 try {
     Write-Host "==> cargo $($CargoArgs -join ' ')" -ForegroundColor Green
     & cargo @CargoArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "cargo build failed with exit code $LASTEXITCODE"
+        throw "cargo build (aurum-godot) failed with exit code $LASTEXITCODE"
     }
 } finally {
     Pop-Location
 }
 
-# Find the produced DLL.
 if ($DebugBuild) {
     $DllSource = Join-Path $Workspace "target\debug\aurum_godot.dll"
 } else {
@@ -87,16 +96,42 @@ if (-not (Test-Path $DllSource)) {
     throw "Build succeeded but DLL not found at: $DllSource"
 }
 
-# Make sure the add-on bin exists.
 if (-not (Test-Path $AddOnBin)) {
     New-Item -ItemType Directory -Path $AddOnBin -Force | Out-Null
 }
 
 $DllTarget = Join-Path $AddOnBin "aurum_godot.dll"
 Copy-Item -Path $DllSource -Destination $DllTarget -Force
-Write-Host "==> Copied DLL to $DllTarget" -ForegroundColor Green
+Write-Host "==> Copied aurum_godot.dll to $DllTarget" -ForegroundColor Green
 
-# Run tests if asked (always on the first run, cheap).
+# ---------- 2. Build life_evolution (if present and not skipped) ----------
+
+if (-not $NoLife) {
+    if (Test-Path $LifeCrate) {
+        Write-Host ""
+        Write-Host "==> Building life_evolution GDExtension" -ForegroundColor Green
+        Push-Location $LifeCrate
+        try {
+            if ($DebugBuild) {
+                & cargo build
+            } else {
+                & cargo build --release
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw "cargo build (life_evolution) failed with exit code $LASTEXITCODE"
+            }
+        } finally {
+            Pop-Location
+        }
+        Write-Host "==> life_evolution built (DLL at $LifeCrate\target\$Profile\life_evolution.dll)" -ForegroundColor Green
+    } else {
+        Write-Host ""
+        Write-Host "(skipping life_evolution: $LifeCrate not found)" -ForegroundColor DarkGray
+    }
+}
+
+# ---------- 3. Tests ----------
+
 if (-not $DebugBuild -and -not $NoTests) {
     Write-Host ""
     Write-Host "==> Running workspace tests" -ForegroundColor Green
@@ -108,7 +143,8 @@ if (-not $DebugBuild -and -not $NoTests) {
     }
 }
 
-# Optionally run Godot.
+# ---------- 4. Optionally run Godot ----------
+
 if ($Run) {
     if (-not (Test-Path $GodotBinary)) {
         throw "Godot binary not found at: $GodotBinary"

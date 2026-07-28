@@ -26,6 +26,9 @@ desktop.ini
 **/bin/*.dylib
 **/bin/*.tmp
 **/bin/*~*
+# Allow the life_evolution GDExtension bin/ folder (kept under version
+# control but not its build artifacts).
+!**/demos/life_evolution/GDExtension/bin/.gitkeep
 
 # Local build outputs
 *.dll.local

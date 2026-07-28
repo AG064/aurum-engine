@@ -26,7 +26,12 @@ and scenes are unchanged — only the Rust crate boundary is slower.
 - **`aurum-vr`** / **`aurum-text`** / **`aurum-cli`** — stubs for
   VR, text-only, and CLI tool genres.
 - **`godot/aurum/`** — Godot project with the add-on, a dev console,
-  and working 2D, 3D, and VN demos.
+  and four demos:
+  - **2D squares** — movement + collision + score
+  - **3D bounce** — gravity + jumping
+  - **VN minimal** — dialogue + choices, full `aurum-vn` shim
+  - **life_evolution** — emergent-universe GPU simulation
+    (full GDExtension integration, 50k+ particles, compute shaders)
 
 ## Quick start
 
@@ -69,13 +74,16 @@ aurum/                         # Cargo workspace root
 │   └── GETTING_STARTED.md
 ├── godot/                     # the Godot project (one folder per repo)
 │   ├── project.godot
-│   ├── addons/aurum/          # the add-on (bin/ is built, source is here)
+│   ├── addons/aurum/          # the engine add-on (bin/ is built, source is here)
 │   ├── scripts/               # shared GDScript (runtime, dev console)
 │   ├── templates/             # starter projects per genre
 │   └── demos/
 │       ├── 2d_squares/        # the 2D demo
 │       ├── 3d_bounce/         # the 3D demo
-│       └── vn_minimal/        # the visual novel demo
+│       ├── vn_minimal/        # the visual novel demo
+│       └── life_evolution/    # the emergent-universe GPU simulation
+│                               # (own GDExtension Rust crate; built by
+│                               # the same `scripts/build.ps1`)
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 └── LICENSE
