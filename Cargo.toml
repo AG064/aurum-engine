@@ -10,11 +10,6 @@ members = [
     "crates/aurum-text",
     "crates/aurum-cli",
 ]
-# The life_evolution demo has its own Rust crate with its own deps.
-# It's built separately by scripts/build.ps1, not as a workspace member.
-exclude = [
-    "godot/demos/life_evolution/GDExtension/rust",
-]
 
 [workspace.package]
 version = "0.1.0"

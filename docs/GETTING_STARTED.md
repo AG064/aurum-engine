@@ -70,7 +70,7 @@ changes require a 5–15s rebuild and the next launch picks them up.
 
 ## Create your own game
 
-1. Copy `godot/aurum/templates/2d/` (or whichever template fits your
+1. Copy `godot/templates/2d/` (or whichever template fits your
    genre) to a new folder.
 2. Open it in the Godot editor (use "Import" from the Project Manager).
 3. Add your own scenes, components, and game logic.
@@ -95,5 +95,5 @@ changes require a 5–15s rebuild and the next launch picks them up.
 - `crates/aurum-2d/src/lib.rs` — read the doc comments for the 2D
   component contract.
 - `crates/aurum-godot/src/lib.rs` — read the GDScript-facing API.
-- `godot/aurum/demos/2d_squares/scripts/main.gd` — read the demo for
+- `godot/demos/2d_squares/scripts/main.gd` — read the demo for
   a working example.

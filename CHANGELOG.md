@@ -10,30 +10,6 @@ The first public release. Foundation only — no API stability promises yet.
 
 ### Added
 
-- **life_evolution demo** — the user's emergent-universe simulation
-  (originally at `C:\Game_Development\life_evolution\`) is now a
-  demo of the Aurum project. The Rust GDExtension (glam, rand, rayon,
-  parking_lot, crossbeam-channel) builds alongside the engine via
-  the same `pwsh scripts/build.ps1` command. The GDScript, scenes,
-  and shaders are preserved verbatim. The main project now uses
-  Forward Plus (required for the particle compute shaders).
-  Original `project.godot` and the inner sub-project structure were
-  collapsed into the Aurum project.
-
-### Added
-
-- **`aurum-vn` GDScript shim** — the Rust `Interpreter` is now reachable
-  from GDScript via `Aurum.story_load`, `Aurum.story_advance`,
-  `Aurum.story_pick_choice`, `Aurum.story_jump_to`,
-  `Aurum.story_get_variable`, `Aurum.story_set_variable`,
-  `Aurum.story_export_state`, `Aurum.story_import_state`,
-  `Aurum.story_current_scene`, `Aurum.story_current_entry_index`.
-  Events come back as Dictionaries.
-- **VN demo** at `godot/aurum/demos/vn_minimal/` — a minimal port of
-  the original VN (`godot/vn/`) that uses `aurum-vn` instead of the
-  old `regular_vn` add-on. Dialogue, choices, save/load state, no
-  localization or transitions.
-
 - **`aurum-core`** — pure Rust engine core.
   - `ecs` module: entities, components, systems, resources.
   - `events` module: typed event bus with subscribe/emit/dispatch.
@@ -67,17 +43,26 @@ The first public release. Foundation only — no API stability promises yet.
     Command / Error).
   - Full save/load state.
   - 5 unit tests.
+  - GDScript shim exposed via the `Aurum` autoload:
+    `Aurum.story_load`, `Aurum.story_advance`, `Aurum.story_pick_choice`,
+    `Aurum.story_jump_to`, `Aurum.story_get_variable`,
+    `Aurum.story_set_variable`, `Aurum.story_export_state`,
+    `Aurum.story_import_state`, `Aurum.story_current_scene`,
+    `Aurum.story_current_entry_index`. Events come back as Dictionaries.
 
 - **`aurum-vr`**, **`aurum-text`**, **`aurum-cli`** — stub crates
   reserving the module names and a minimal surface so the workspace
   builds and the module surface is fixed.
 
-- **Godot project** at `godot/aurum/`.
+- **Godot project** at `godot/`.
   - Add-on `addons/aurum/` with the GDExtension, plugin, and runtime
     autoload (`Aurum`).
   - `aurum_dev_console` (F1 in debug builds).
   - `aurum_2d_kinematics` system.
-  - 2D squares demo (player + coins, score, dev console).
+
+- **Tutorial demos**:
+  - `godot/demos/2d_squares/` — player + coins, score, dev console.
+  - `godot/demos/3d_bounce/` — gravity + jumping.
 
 - **Templates** for 2D (full), 3D (stub README), VN (stub README).
 
@@ -98,11 +83,16 @@ The first public release. Foundation only — no API stability promises yet.
 
 ### Notes
 
-- The original `godot/vn/` project (VNEngine) is unchanged. The new
-  `aurum-vn` module is a clean re-implementation. Migration of the
-  existing VN is a follow-up.
-- The 2D squares demo is the only complete demo in this release. The
-  3D and VN demos are planned for 0.2.0.
+- Game projects that build on Aurum live in their own repositories:
+  - `AG064/the-regular-novel` — visual novel game, consumes `aurum-vn`.
+  - `AG064/life_evolution` — GPU life simulation, consumes the core
+    runtime + its own GDExtension crate.
+  Each game copies the engine add-on (`addons/aurum/`) from this
+  repo via its own `build.ps1` and depends on the compiled
+  `aurum_godot.dll` produced by `scripts/build.ps1` here.
 - Cross-platform builds are configured but only the Windows x86_64
-  binary is in the add-on bin/. Linux / macOS binaries will be
-  produced by the CI on tagged releases.
+  binary is in the add-on bin/. Linux / macOS binaries are produced
+  by the CI on tagged releases.
+- The 2D and 3D demos are the only complete demos in this release.
+  The VN module has full tests and a GDScript shim but no demo
+  inside this repo (the live example is the game project above).

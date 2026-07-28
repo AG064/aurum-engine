@@ -10,7 +10,6 @@
 #
 # Usage:
 #   pwsh scripts/dev.ps1
-#   pwsh scripts/dev.ps1 -RunEditor
 
 [CmdletBinding()]
 param(

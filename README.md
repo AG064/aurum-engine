@@ -6,7 +6,7 @@ Aurum is one engine for many game genres. You write game logic in GDScript
 and the engine layer in Rust. Hot-reload stays fast because GDScript
 and scenes are unchanged — only the Rust crate boundary is slower.
 
-[![CI](https://github.com/yourname/aurum/actions/workflows/ci.yml/badge.svg)](https://github.com/yourname/aurum/actions/workflows/ci.yml)
+[![CI](https://github.com/AG064/aurum-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/AG064/aurum-engine/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 [![Godot](https://img.shields.io/badge/godot-4.7-blue.svg)](https://godotengine.org)
@@ -25,13 +25,10 @@ and scenes are unchanged — only the Rust crate boundary is slower.
   the original `godot/vn/` story format onto the new engine.
 - **`aurum-vr`** / **`aurum-text`** / **`aurum-cli`** — stubs for
   VR, text-only, and CLI tool genres.
-- **`godot/aurum/`** — Godot project with the add-on, a dev console,
-  and four demos:
+- **`godot/`** — Godot project with the add-on, a dev console,
+  and two tutorial demos:
   - **2D squares** — movement + collision + score
   - **3D bounce** — gravity + jumping
-  - **VN minimal** — dialogue + choices, full `aurum-vn` shim
-  - **life_evolution** — emergent-universe GPU simulation
-    (full GDExtension integration, 50k+ particles, compute shaders)
 
 ## Quick start
 
@@ -52,7 +49,7 @@ project at a different path, pass `-GodotProject <path>`.
 ## Repository layout
 
 ```
-aurum/                         # Cargo workspace root
+aurum-engine/                  # Cargo workspace root
 ├── Cargo.toml                 # workspace manifest
 ├── crates/
 │   ├── aurum-core/            # pure Rust engine (tested)
@@ -78,24 +75,35 @@ aurum/                         # Cargo workspace root
 │   ├── scripts/               # shared GDScript (runtime, dev console)
 │   ├── templates/             # starter projects per genre
 │   └── demos/
-│       ├── 2d_squares/        # the 2D demo
-│       ├── 3d_bounce/         # the 3D demo
-│       ├── vn_minimal/        # the visual novel demo
-│       └── life_evolution/    # the emergent-universe GPU simulation
-│                               # (own GDExtension Rust crate; built by
-│                               # the same `scripts/build.ps1`)
+│       ├── 2d_squares/        # the 2D tutorial
+│       └── 3d_bounce/         # the 3D tutorial
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 └── LICENSE
 ```
 
+> **Note** — game projects that build on Aurum live in their own
+> repositories. The `aurum-vn` module is consumed by
+> [`the-regular-novel`](https://github.com/AG064/the-regular-novel);
+> the `aurum-2d` / `aurum-3d` / core runtime can be used by any
+> 2D or 3D game. See `docs/GETTING_STARTED.md` for the recommended
+> project layout.
+
 ## How it fits together
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ Your game (in godot/aurum/demos/<your_game>)                 │
+│ Your game (in a separate repo, sibling to aurum-engine)     │
 │ - Scenes, UI, art, audio                                     │
 │ - GDScript game logic (hot-reloads in <100ms)                │
+└──────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Engine add-on (addons/aurum/, copied into the game repo)    │
+│ - The `Mavis` Node (the only Rust surface to GDScript)      │
+│ - The `Aurum` autoload (ergonomic shim around Mavis)        │
+│ - The compiled GDExtension DLL (aurum_godot.dll)            │
 └──────────────────────────────────────────────────────────────┘
                                 │
                                 ▼

@@ -74,11 +74,12 @@ GDScript shim (exposed via the `Mavis` class, wrapped by `Aurum`):
 - `Aurum.story_export_state()` / `import_state(json)` — save/load.
 - `Aurum.story_current_scene()` / `current_entry_index()` — cursor.
 
-A working minimal demo is at `godot/aurum/demos/vn_minimal/`. It shows
-the API surface, supports a 3-way choice, and demonstrates variable
-state. The demo's `stories/demo.json` is the story format the original
-`godot/vn/` engine used — the same format is supported, so existing
-stories can be copied over.
+A working game built on `aurum-vn` lives at
+[`AG064/the-regular-novel`](https://github.com/AG064/the-regular-novel)
+(a separate repository). It loads stories from JSON, advances
+through scenes, supports choices, and demonstrates save/load. The
+story format is intentionally compatible with the original
+`godot/vn/` engine, so existing stories can be reused.
 
 ## `aurum-vr` — XR/VR (stub)
 

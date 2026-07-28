@@ -55,11 +55,11 @@ When you add a new module:
 4. Add a doc comment block at the top of `lib.rs` listing the component
    names and field shapes (this is the contract with GDScript).
 5. (Optional) Add a GDScript shim under
-   `godot/aurum/addons/aurum/scripts/aurum_<name>.gd` if GDScript code
+   `godot/addons/aurum/scripts/aurum_<name>.gd` if GDScript code
    needs to use the module's components.
-6. Add a demo under `godot/aurum/demos/<name>/` if the module is
+6. Add a demo under `godot/demos/<name>/` if the module is
    visual or interactive.
-7. Add a starter template under `godot/aurum/templates/<name>/` that
+7. Add a starter template under `godot/templates/<name>/` that
    other projects can copy.
 
 The component-name contract is: a Rust component called `"Foo"` has
