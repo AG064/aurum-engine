@@ -70,7 +70,7 @@ per-frame cap of 5 ticks to avoid the "spiral of death" on slow frames.
 
 ### 3. GDExtension shim (`aurum-godot`)
 
-The single Rust surface that GDScript sees: a `Mavis` Node class.
+The single Rust surface that GDScript sees: a `AurumNode` Node class.
 
 #### Why a single class
 
@@ -94,7 +94,7 @@ This is intentionally simple:
 
 The Rust side of a module (e.g. `aurum-2d::Position2D`) defines a
 strongly-typed version of the same component. Rust systems can iterate
-the typed `World` and the JSON-blob `Mavis` independently.
+the typed `World` and the JSON-blob `AurumNode` independently.
 
 #### Event bridge
 
@@ -115,6 +115,7 @@ side can react.
 - `time_scale`
 - `state` (the typed state)
 - `components` (the dynamic component store, per-entity)
+- `space` (the serialized `aurum-space` flight configuration, input, and state)
 
 `Aurum.load_from_json(json)` replaces everything. It does not merge.
 Games that want to merge should read the JSON, manipulate it, and write
@@ -128,13 +129,19 @@ Each module follows the same pattern:
   Rust-side systems.
 - Optional GDScript shim in `addons/<module>/scripts/` (e.g.
   `aurum_2d_kinematics.gd`) that bridges the typed Rust world to the
-  JSON-blob `Mavis` store and to Godot's scene tree.
+  JSON-blob `AurumNode` store and to Godot's scene tree.
 - A demo and a template under `demos/<module>/` and
   `templates/<module>/`.
 
 Cross-module composition: a 3D game with VN dialogue enables both
 `aurum-3d` and `aurum-vn`, calls `Aurum.register_module("3d")` and
 `Aurum.register_module("vn")` on startup, and uses both APIs.
+
+The `aurum-space` module follows the same boundary. Its typed Rust state is
+authoritative for flight, resources, and universe coordinates. The Godot
+bridge exposes input commands and immutable snapshots. A space game can keep
+ships, missions, and world content in its own repository while reusing the
+flight and coordinate systems.
 
 ## The contract between layers
 

@@ -15,11 +15,13 @@ and scenes are unchanged — only the Rust crate boundary is slower.
 
 - **`aurum-core`** — pure Rust ECS, event bus, typed state with save/load,
   fixed timestep. No Godot dependency; fully tested with `cargo test`.
-- **`aurum-godot`** — GDExtension shim. Exposes a single `Mavis` Node
+- **`aurum-godot`** — GDExtension shim. Exposes a single `AurumNode` Node
   class to GDScript with a clean entity/component/event/state API.
 - **`aurum-2d`** — 2D components (Position2D, Velocity2D, AABB) +
   AABB collision math + kinematic step. **Working 2D demo.**
 - **`aurum-3d`** — 3D components and kinematic step. **Working 3D demo.**
+- **`aurum-space`** — fixed-step 6DOF flight, ship resources, and bounded
+  universe coordinates. Pure Rust and reusable by space games.
 - **`aurum-vn`** — story interpreter with full GDScript shim
   (`Aurum.story_*`). Includes a minimal visual novel demo that ports
   the original `godot/vn/` story format onto the new engine.
@@ -56,6 +58,7 @@ aurum-engine/                  # Cargo workspace root
 │   ├── aurum-godot/           # GDExtension shim
 │   ├── aurum-2d/              # 2D game module
 │   ├── aurum-3d/              # 3D game module
+│   ├── aurum-space/           # space flight and universe coordinates
 │   ├── aurum-vn/              # VN story interpreter
 │   ├── aurum-vr/              # VR (stub)
 │   ├── aurum-text/            # text-only (stub)
@@ -101,8 +104,8 @@ aurum-engine/                  # Cargo workspace root
                                 ▼
 ┌──────────────────────────────────────────────────────────────┐
 │ Engine add-on (addons/aurum/, copied into the game repo)    │
-│ - The `Mavis` Node (the only Rust surface to GDScript)      │
-│ - The `Aurum` autoload (ergonomic shim around Mavis)        │
+│ - The `AurumNode` Node (the only Rust surface to GDScript)      │
+│ - The `Aurum` autoload (ergonomic shim around AurumNode)        │
 │ - The compiled GDExtension DLL (aurum_godot.dll)            │
 └──────────────────────────────────────────────────────────────┘
                                 │
@@ -116,7 +119,7 @@ aurum-engine/                  # Cargo workspace root
                                 ▼
 ┌──────────────────────────────────────────────────────────────┐
 │ Engine shim (aurum-godot)                                    │
-│ - Mavis Node class (the only Rust surface to GDScript)      │
+│ - AurumNode Node class (the only Rust surface to GDScript)      │
 │ - JSON-blob component store (GDScript-friendly)             │
 │ - Bridges the typed event bus to Godot signals              │
 └──────────────────────────────────────────────────────────────┘

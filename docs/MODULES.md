@@ -22,7 +22,7 @@ world.tick(1.0 / 60.0);
 
 ## `aurum-godot` — GDExtension shim
 
-The only Rust code Godot sees. Exposes a single `Mavis` Node class.
+The only Rust code Godot sees. Exposes a single `AurumNode` Node class.
 Always compiled in (it's the bridge to the engine).
 
 GDScript API is documented at the top of `crates/aurum-godot/src/lib.rs`.
@@ -53,6 +53,36 @@ Helpers:
 GDScript shim: not yet written. Plan: a `Node3D` analogue of the 2D
 entity, a 3D kinematics node, and a camera controller.
 
+## `aurum-space` — space simulation
+
+Pure Rust space simulation module. It does not depend on Godot and is
+intended to be the authority for reusable flight state.
+
+It provides:
+
+- `SpaceSimulation` with fixed-step 6DOF flight.
+- `FlightConfig` for mass, thrust, torque, speed, boost, heat, fuel,
+  shields, and hull.
+- Flight Assist and dampening behavior.
+- `UniversePosition` with bounded local coordinates and sector coordinates.
+- Deterministic snapshots suitable for a renderer or network boundary.
+- Unit tests for acceleration, damping, sector normalization, and fixed ticks.
+
+The Godot bridge exposes the active simulation through the `Aurum` autoload:
+
+- `Aurum.space_configure(...)`
+- `Aurum.space_set_input(...)`
+- `Aurum.space_step(delta)`
+- `Aurum.space_snapshot()`
+- `Aurum.space_set_transform(...)`
+- `Aurum.space_set_status(...)` for load and service boundaries.
+- `Aurum.space_consume_fuel(amount)` for atomic travel costs.
+- `Aurum.space_stop_motion()` for travel and respawn boundaries.
+- `Aurum.space_repair_full()` / `Aurum.space_refuel_full()` for station services.
+
+Games should mirror snapshots into presentation nodes. Presentation nodes
+must not become the source of truth for flight state.
+
 ## `aurum-vn` — visual novels
 
 The full VN module: Rust interpreter + GDScript shim + a working demo.
@@ -64,7 +94,7 @@ Rust side (in `aurum-vn`):
   (Dialogue, Choice, Quit, Goto, Command, Error).
 - `Event` and `ChoiceData` — typed payloads.
 
-GDScript shim (exposed via the `Mavis` class, wrapped by `Aurum`):
+GDScript shim (exposed via the `AurumNode` class, wrapped by `Aurum`):
 
 - `Aurum.story_load(json, start_scene)` — load and start.
 - `Aurum.story_advance()` — get the next event as a Dictionary.

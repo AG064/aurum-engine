@@ -5,7 +5,7 @@
 //! a component (or a resource) — `State` is for the *few* values that need
 //! to be globally accessible and survive save/load.
 //!
-//! Why string keys? They match the GDScript surface (`Mavis.state.get("score")`)
+//! Why string keys? They match the GDScript surface (`AurumNode.state.get("score")`)
 //! and are easy to log. If a project outgrows this, replace with a typed
 //! handle and the GDScript shim can keep the same call site.
 

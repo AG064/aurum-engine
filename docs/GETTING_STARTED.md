@@ -37,8 +37,8 @@ Godot binary at a non-default path, pass `-GodotBinary <path>`.
 pwsh scripts/build.ps1 -Run -Editor
 ```
 
-The editor will open with the project at `godot/`. The `Mavis` class
-is available — type `Mavis` in the search box of the Add Node dialog
+The editor will open with the project at `godot/`. The `AurumNode` class
+is available — type `AurumNode` in the search box of the Add Node dialog
 to see it.
 
 To play the demo, press F5 (or click the play button in the top-right).
@@ -79,7 +79,7 @@ changes require a 5–15s rebuild and the next launch picks them up.
 
 ## Common pitfalls
 
-- **"Mavis class not found"** — the GDExtension DLL is not at
+- **"AurumNode class not found"** — the GDExtension DLL is not at
   `godot/addons/aurum/bin/aurum_godot.dll`. Re-run
   `pwsh scripts/build.ps1`.
 - **"DLL changed on disk"** — Godot locks the DLL while the editor is

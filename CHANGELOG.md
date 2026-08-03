@@ -18,7 +18,7 @@ The first public release. Foundation only — no API stability promises yet.
   - `assets` module: stable resource IDs.
   - 15 unit tests, all green.
 
-- **`aurum-godot`** — GDExtension shim exposing a `Mavis` Node class to
+- **`aurum-godot`** — GDExtension shim exposing a `AurumNode` Node class to
   GDScript. The single Rust surface Godot sees. Includes:
   - Entity spawn / despawn.
   - JSON-blob component store with type-keyed reverse index.
