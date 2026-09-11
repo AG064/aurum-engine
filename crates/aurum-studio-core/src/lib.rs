@@ -47,6 +47,7 @@ pub mod gameplay;
 pub mod hash;
 pub mod modules;
 pub mod ownership;
+pub mod presets;
 pub mod process;
 pub mod project;
 pub mod random;

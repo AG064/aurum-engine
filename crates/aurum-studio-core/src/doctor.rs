@@ -430,6 +430,58 @@ pub fn diagnose(project: &Project, toolchain: &Toolchain, godot_hint: Option<&Pa
         }
     }
 
+    // ----- export presets -------------------------------------------------
+
+    // Only when there is a Godot project to look in. A project with no presets
+    // and a project with no file are different situations: the first is a
+    // choice, the second usually means the file did not travel with the
+    // checkout, and only the second is worth a line.
+    if let Some(godot_root) = project.godot_project_dir() {
+        if let Ok(presets) = crate::presets::read(godot_root) {
+            let impossible = presets.impossible(crate::presets::KNOWN_PLATFORMS);
+            if !impossible.is_empty() {
+                // Found at the end of an export otherwise, which is the worst
+                // moment to learn it.
+                let described = impossible
+                    .iter()
+                    .map(|preset| format!("'{}' -> {}", preset.name, preset.platform))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                findings.push(
+                    Finding::warning(
+                        "export_presets",
+                        format!(
+                            "{} preset(s) name a platform Godot does not have",
+                            impossible.len()
+                        ),
+                    )
+                    .with_evidence(described)
+                    .with_remedy(
+                        "recreate them in Godot's export dialog, which knows the platform names",
+                    ),
+                );
+            } else if presets.file_present && presets.presets.is_empty() {
+                findings.push(
+                    Finding::warning("export_presets", "export_presets.cfg has no usable presets")
+                        .with_evidence("the file is there but nothing in it names a preset")
+                        .with_remedy("add one in Godot's Project > Export dialog"),
+                );
+            } else if !presets.presets.is_empty() {
+                let runnable = presets.presets.iter().filter(|p| p.runnable).count();
+                findings.push(
+                    Finding::ok(
+                        "export_presets",
+                        format!(
+                            "{} export preset(s), {runnable} runnable",
+                            presets.presets.len()
+                        ),
+                    )
+                    .with_evidence(presets.platforms().join(", ")),
+                );
+            }
+        }
+    }
+
     // ----- toolchain ------------------------------------------------------
 
     match &toolchain.cargo {

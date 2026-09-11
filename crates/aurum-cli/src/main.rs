@@ -32,6 +32,8 @@ COMMANDS:
     godot [project]       What Godot this machine has, or fetch one with
                           --fetch <url> --sha256 <digest>. Refuses to install
                           a download whose digest does not match.
+    presets [project]     What this project can be exported into, read
+                          from Godot's own export_presets.cfg.
     stop [project]        Stop the processes this project's session launched.
     restart [project]     Restart the editor, for a native structural change
                           that cannot be migrated live. Asks politely; refuses
@@ -70,6 +72,7 @@ fn main() -> ExitCode {
         Some("stop") => commands::stop(&args[1..]),
         Some("modules") => commands::modules(&args[1..]),
         Some("godot") => commands::godot(&args[1..]),
+        Some("presets") => commands::presets(&args[1..]),
         Some("restart") => commands::restart(&args[1..]),
         Some("new") => commands::new(&args[1..]),
         Some("studio") => commands::studio(&args[1..]),

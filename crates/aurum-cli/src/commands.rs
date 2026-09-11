@@ -1010,6 +1010,86 @@ fn list_godot(path: Option<&Path>, json: bool) -> ExitCode {
     }
 }
 
+/// `aurum presets [project]`
+///
+/// What this project can be exported into. Read rather than generated: Godot
+/// owns the format, the fields differ per platform, and a generator would be a
+/// second implementation of somebody else's schema whose failure mode is a
+/// preset that looks right and produces a broken build.
+pub fn presets(args: &[String]) -> ExitCode {
+    let options = match parse(args) {
+        Ok(options) => options,
+        Err(message) => return usage("presets", &message),
+    };
+
+    let path = target(&options);
+    let project = match Project::open(&path) {
+        Ok(project) => project,
+        Err(error) => {
+            eprintln!("aurum presets: {error}");
+            return ExitCode::from(exit::FAILED);
+        }
+    };
+
+    let Some(godot_root) = project.godot_project_dir() else {
+        eprintln!("aurum presets: no project.godot, so there is nothing to export");
+        return ExitCode::from(exit::WARNING);
+    };
+
+    let report = match aurum_studio_core::presets::read(godot_root) {
+        Ok(report) => report,
+        Err(error) => {
+            eprintln!("aurum presets: {error}");
+            return ExitCode::from(exit::FAILED);
+        }
+    };
+
+    let impossible = report.impossible(aurum_studio_core::presets::KNOWN_PLATFORMS);
+
+    if options.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "project": project.config.name,
+                "file_present": report.file_present,
+                "presets": report.presets.iter().map(|preset| serde_json::json!({
+                    "name": preset.name,
+                    "platform": preset.platform,
+                    "runnable": preset.runnable,
+                })).collect::<Vec<_>>(),
+                "impossible": impossible.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
+            })
+        );
+    } else if !report.file_present {
+        println!("{}: no export_presets.cfg", project.config.name);
+        println!("  a project carried between machines often arrives without one");
+        println!("  add presets in Godot's Project > Export dialog");
+    } else if report.presets.is_empty() {
+        println!(
+            "{}: export_presets.cfg has no usable presets",
+            project.config.name
+        );
+    } else {
+        println!("{} export presets", project.config.name);
+        for preset in &report.presets {
+            let marker = if preset.runnable { "run" } else { "   " };
+            let flag = if impossible.iter().any(|p| p.name == preset.name) {
+                "  <- Godot has no such platform"
+            } else {
+                ""
+            };
+            println!("  {marker}  {:<20} {}{flag}", preset.name, preset.platform);
+        }
+    }
+
+    // A preset that cannot work is the one outcome worth branching on.
+    if impossible.is_empty() && !report.presets.is_empty() {
+        ExitCode::from(exit::OK)
+    } else {
+        ExitCode::from(exit::WARNING)
+    }
+}
+
 /// `aurum stop [project]`
 ///
 /// Stops only processes this project's most recent session launched, and only
