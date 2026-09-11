@@ -42,3 +42,8 @@ logs/
 .env.local
 *.pem
 *.key
+
+# Vendored third-party Godot addon: godot-mcp-toolkit (NPGameDev, MIT code /
+# non-free brand). Used locally by the Phase 0 MCP live harness. Not part of
+# the engine's history — see docs/HOT_RELOAD.md for how it is consumed.
+godot/addons/godot_mcp_toolkit/
