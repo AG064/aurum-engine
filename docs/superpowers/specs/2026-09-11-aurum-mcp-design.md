@@ -17,12 +17,15 @@ The decision is a **three-layer** architecture:
 2. **Engine tools** — an Aurum-owned `MCPToolkitExtension` that exposes
    `AurumNode` semantics as MCP tools. This is the missing capability and the
    main deliverable.
-3. **Headless core server** — a later `aurum-mcp` Rust crate driving
-   `aurum-core` with no Godot process at all. Because Aurum's authoritative
-   simulation is Rust rather than GDScript, this is the *higher-fidelity*
-   surface for typed, deterministic AI control, not merely a CI convenience.
+3. **Headless core server** — an `aurum-mcp` Rust crate driving `aurum-core`
+   with no Godot process at all. Because Aurum's authoritative simulation is
+   Rust rather than GDScript, this is the *higher-fidelity* surface for typed,
+   deterministic AI control, not merely a CI convenience. It is also the only
+   layer that is genuinely **zero-dependency** — see §6.
 
-No toolkit is written from scratch. No fork.
+No toolkit is written from scratch. No fork. Dependency minimization is a
+first-class constraint, and it reorders the phasing: the zero-dependency
+headless server leads (§10).
 
 ## 1. What "control the engine" actually means
 
@@ -163,7 +166,7 @@ Consequently, any tool that must work against a running game should be designed
 to work **either** through the generic Godot runtime methods **or** through the
 headless core server — not through an editor extension that cannot reach it.
 
-### Layer 3 — `aurum-mcp` Rust crate (ours, later)
+### Layer 3 — `aurum-mcp` Rust crate (ours, first to build)
 
 `aurum-core` is pure Rust with no Godot dependency and is already fully
 unit-tested. A headless MCP server can therefore drive the engine with **no
@@ -199,6 +202,11 @@ call `AurumNode`, and serialize.
 | Story (VN) | `story_load`, `story_advance`, `story_pick_choice`, `story_jump_to`, `story_get_variable`, `story_set_variable`, `story_export_state`, `story_import_state`, `story_current_scene`, `story_is_loaded` | `aurum_story_*` |
 
 ### v1 scope
+
+This surface is shared: the same `aurum_*` tool names should be served by the
+headless core server (layer 3) and the editor extension (layer 2), so an agent
+that learns one works against the other. Only the transport and the backing
+`AurumNode` instance differ.
 
 Ship the **read** surface completely and the **write** surface conservatively:
 
@@ -244,21 +252,65 @@ correctly.
 - **Local only** — no telemetry, no remote transport. This matches the Studio
   spec's local-only requirement.
 
-## 6. Dependency and provenance policy
+## 6. Dependency accounting and provenance policy
 
+Dependency minimization is an explicit project priority. The layers differ
+enormously, and the risk is *not* where it first appears.
+
+| Layer | Dependency cost | Notes |
+|---|---|---|
+| **2 — Aurum extension** | **Zero new Rust crates.** `Cargo.lock` stays at 36 packages | Pure GDScript copied into a Godot project, absent from a default checkout |
+| **1 — Toolkit addon** | Zero packages, but **in-process trust** | 127 files / 24,077 lines of third-party GDScript, no compiled artifacts at all |
+| **1 — Node bridge** | **92 transitive npm packages** | The dominant supply-chain surface |
+| **3 — Headless Rust server** | **Zero new crates achievable** | MCP over stdio is JSON-RPC 2.0; `serde` + `serde_json` already present |
+
+Measured on this machine:
+
+- The toolkit is **pure text** — no `.dll`, `.exe`, or compiled artifacts. It
+  is a trust decision, not a package-count decision. The registry documents
+  its own model honestly: installed extensions are *full-trust in-process
+  code*. It is removable and optional, and that is the mitigation.
+- `@npgamedev/godot-mcp-server@1.0.0` declares only three runtime
+  dependencies (`@modelcontextprotocol/sdk`, `ws`, `zod`) and pins them to
+  exact versions — good hygiene. But the installed tree is **92 packages**,
+  including `express`, `hono`, `cors`, `cookie`, `express-rate-limit`,
+  `jose`, `pkce-challenge`, and `ajv`, pulled in by the MCP SDK's HTTP/SSE
+  and OAuth transports, which a local stdio + WebSocket setup does not use.
+- The bridge is currently launched as `npx -y`, which resolves the **latest**
+  published version at every start. That is the sharpest edge in the whole
+  design: unpinned remote code execution on each launch.
+
+Network egress audit of the toolkit: no telemetry and no background requests.
+The only outbound path is `ExtensionCatalog.CATALOG_URL`, a **user-initiated**
+fetch from a GitHub gist (`ui/dock/ext/extension_catalog_dialog.gd`, reached
+only from the Extensions button). Note the source is a *mutable* URL at a
+stable address — content can change without the version changing. `shell_open`
+is gated to `https://` only. WebSocket auth is a fresh 32-byte token per
+server start, required as the first message from every client.
+
+Not yet verified: the bridge's CVE status. `npm audit` cannot run against the
+installed package (`ENOLOCK` — published packages ship no lockfile). Auditing
+it requires a network-connected `npm i --package-lock-only` in a scratch copy.
+
+Policy:
+
+- **Do not make the Node bridge load-bearing.** Prefer the zero-dependency
+  headless server (layer 3) for anything that does not genuinely need the
+  Godot editor.
+- If the bridge is used, **pin `@npgamedev/godot-mcp-server@1.0.0` and install
+  it once**, rather than `npx -y` per launch. Record the resolved entry hash,
+  following the Phase 0 Inspector precedent.
 - The toolkit is **third-party and stays untracked** (see `.gitignore`). Its
   code is MIT but its logo, icons, banner, and name are explicitly *not*
-  licensed for reuse — so it must never be rebranded, and Aurum Studio should
-  present it as an optional, user-installed component.
-- Pin the bridge server to an exact version. Phase 0 already set this
-  precedent by binding @modelcontextprotocol/inspector to one verified
-  version and hashing its entry point; the same discipline applies to
-  `@npgamedev/godot-mcp-server`.
-- Prefer a pinned local install over `npx -y` in any verified path, for
-  determinism and offline operation.
-- This extension depends on the toolkit's `MCPToolkitExtension` base class and
-  registry signatures. Treat a toolkit version bump as a **breaking-change
-  review**, version-gate accordingly, and keep a compatibility contract test.
+  licensed for reuse — never rebrand it, and present it as an optional,
+  user-installed component.
+- Treat a toolkit version bump as a **breaking-change review**; keep a
+  compatibility contract test against the base class and registry signatures.
+- Separately: the workspace manifest tracks
+  `godot = { git = ".../gdext", branch = "master" }`. `Cargo.lock` pins the
+  current commit so builds are reproducible today, but any `cargo update` can
+  jump to a moving branch. Pinning to a tag or rev is a larger risk reduction
+  than anything this design adds, and is worth doing independently.
 
 ## 7. Export safety
 
@@ -307,21 +359,26 @@ Installed state (untracked, like the toolkit itself):
 
 ## 10. Phasing
 
-- **M1 — Spike.** Install the toolkit, register `aurum_fingerprint` and
-  `aurum_world_snapshot` as **editor-side** extension tools, connect a real MCP
-  client, and prove R1. Small, and it de-risks everything after it.
-- **M2 — Read surface.** All read tools, read-only posture verified, plus the
-  install/uninstall script and compatibility contract test.
-- **M3 — Write surface.** Mutation tools with undo where the toolkit allows,
-  save/load, and a documented recovery story.
-- **M4 — Runtime reach.** Document and harden the `execute.code` interim path
-  for reaching `AurumNode` in a running game, and decide whether a dedicated
-  Aurum runtime bridge is justified. Depends on the finding in
-  "Runtime control is not extension-capable".
-- **M5 — Space and story.** `aurum-space` and `aurum-vn` tool groups.
-- **M6 — Headless `aurum-mcp` crate.** No Godot; typed deterministic AI
-  control of `aurum-core`, usable in CI. This is the higher-fidelity surface
-  for simulation and the long-term answer for runtime control.
+Ordered by dependency cost, lowest first. The zero-dependency path leads,
+because dependency minimization is a stated priority and it is also the
+higher-fidelity surface for simulation.
+
+- **M1 — Headless `aurum-mcp` crate (zero new crates).** A minimal MCP server
+  over stdio implementing `initialize`, `tools/list`, and `tools/call` as
+  JSON-RPC 2.0, using the existing `serde` + `serde_json`. Blocking stdio is
+  sufficient; no async runtime, no npm, no Godot, no third-party trust. Start
+  with `aurum_world_snapshot`, `aurum_entity_*`, `aurum_component_*`,
+  `aurum_state_*`, `aurum_fingerprint`. Driven by `aurum mcp`.
+- **M2 — Headless write surface and playtests.** Mutations, save/load, fixed
+  timestep stepping, and deterministic scenario replay for CI.
+- **M3 — Optional editor integration (spike).** Only if editor-side authoring
+  control is actually wanted. Install the toolkit, register `aurum_fingerprint`
+  and `aurum_world_snapshot` as extension tools, and settle R1.
+- **M4 — Editor read and write surface.** Full tool set, read-only posture
+  verified, install/uninstall script, compatibility contract test.
+- **M5 — Runtime reach.** Harden the `execute.code` interim path for reaching
+  `AurumNode` in a running game, or route it to the headless server.
+- **M6 — Space and story tool groups.**
 
 ## 11. Non-goals
 
