@@ -49,6 +49,7 @@
 //! ```
 
 pub mod anim;
+pub mod gdscript;
 pub mod gltf;
 pub mod gltf_import;
 pub mod mesh;

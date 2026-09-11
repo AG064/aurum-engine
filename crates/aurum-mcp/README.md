@@ -59,7 +59,7 @@ Point it at the absolute path to `aurum.exe` if it is not on your `PATH`.
 
 ## Tools
 
-46 tools, all prefixed `aurum_`. Every read-only tool carries the
+50 tools, all prefixed `aurum_`. Every read-only tool carries the
 `readOnlyHint` annotation, so a client can filter without a second code path.
 
 They split into a **runtime** group (31 tools: entities, components, events,
@@ -125,6 +125,28 @@ Two conventions matter when scripting this:
 sprite a `color` and it also composes a placeholder PNG, which is enough to
 block out a UI before real art exists. The PNG encoder is written against
 DEFLATE stored blocks, so it needs no compression crate.
+
+### Baking a Godot scene
+
+glTF carries geometry, materials, and animation, but it cannot express
+*script attachment* — binding a `.gd` to a node is a Godot-native resource
+edit. `aurum_scene_bake` closes that gap by generating a GDScript that loads
+the exported glTF, attaches scripts by node path, and saves a real `.tscn`.
+
+Aurum never hand-writes a scene file: Godot's own `PackedScene` and
+`ResourceSaver` own that format. The result is a version-controllable scene
+with full editor undo, produced without any third-party code.
+
+```
+aurum_content_export   -> res://models/level.gltf
+aurum_scene_bake       -> gen/bake.gd
+godot --headless --script res://gen/bake.gd   -> res://models/level.tscn
+```
+
+Verified by `scripts/tests/bake_scene.ps1`, which runs the generated script in
+Godot 4.7 and asserts the finished `.tscn` both references the script *and*
+carries it on the node — a scene can reference a resource without using it,
+which would look like success and do nothing.
 
 ### Importing Blender work
 

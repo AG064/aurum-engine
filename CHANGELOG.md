@@ -74,6 +74,19 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - **`cargo run -p aurum-content --example inspect_gltf -- <file>`** — summarise
   any glTF or GLB.
 
+- **Scene baking** (`aurum-content::gdscript`) — generates a GDScript that
+  loads an exported glTF, attaches scripts to named nodes, and saves a real
+  `.tscn`. This is the scripting path: glTF cannot express script attachment,
+  and routing it through generated code means Godot owns the scene format, no
+  third-party bridge is involved, and the result is version-controllable.
+  Options are validated before generation, and string literals are escaped.
+
+- **`aurum_scene_bake`** — the MCP tool for the above (50 tools total).
+
+- **`scripts/tests/bake_scene.ps1`** — end-to-end gate: generate, run the
+  script in Godot 4.7, and assert the `.tscn` references the script and carries
+  it on the right node, with the hierarchy and animation intact.
+
 ### Fixed
 
 - `PathGuard` denied every path when the root was relative, so

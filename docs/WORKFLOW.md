@@ -53,16 +53,17 @@ Every row below is implemented and tested. "Tool" names are the MCP tools.
 | **Story / VN** | "load the story, advance, pick choice 0" | `aurum_story_*` |
 | **Space flight** | "set throttle, step one second" | `aurum_space_*` |
 | **Save / restore** | "save to slot1, reset, load slot1" | `aurum_save`, `aurum_load`, `aurum_reset` |
-| **Scripting** | edit `.gd` files, or write Rust systems | file tools / the editor |
+| **Scripting** | "attach hero.gd to the Hero node" | `aurum_scene_bake` → run the generated script in Godot |
 
 ## The everyday loop
 
 ```
 1.  aurum mcp            (or point your AI client at it)
 2.  Ask the AI to build or change something.
-3.  aurum_content_export -> models/scene.gltf
-4.  Godot imports it. Press play.
-5.  Rust changes? pwsh scripts/dev.ps1  -> hot reload, editor stays open.
+3.  aurum_content_export -> models/scene.gltf     (geometry, materials, animation)
+4.  aurum_scene_bake     -> gen/bake.gd           (attaches scripts, saves a .tscn)
+5.  Godot imports it. Press play.
+6.  Rust changes? pwsh scripts/dev.ps1  -> hot reload, editor stays open.
 ```
 
 Step 5 is the Phase 0 loop: pure-Rust implementation changes reload into a

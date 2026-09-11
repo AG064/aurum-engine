@@ -878,6 +878,74 @@ fn tool_sprite_slice(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult {
     }))
 }
 
+/// Generate the GDScript that bakes the document into a Godot `.tscn`.
+///
+/// This is the scripting path. glTF carries geometry, materials, and
+/// animation, but attaching a `.gd` to a node is a Godot-native resource edit
+/// the format cannot express. Rather than bridge into a live editor, Aurum
+/// emits a script Godot runs itself — so the result is a real scene file with
+/// full editor undo, and nothing third-party is involved.
+fn tool_scene_bake(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult {
+    let args = Args::new(params)?;
+
+    let gltf_path = args.str("gltf_path")?.to_string();
+    let output_scene = args.str("output_scene")?.to_string();
+    let destination = ctx.paths.resolve(args.str("script_path")?)?;
+
+    let mut options = aurum_content::gdscript::BakeOptions::new(gltf_path, output_scene);
+    if let Some(name) = args.get("root_name").and_then(Value::as_str) {
+        options.root_name = name.to_string();
+    }
+
+    if let Some(entries) = args.get("scripts") {
+        let entries = entries
+            .as_array()
+            .ok_or_else(|| ToolError::Invalid("'scripts' must be an array".into()))?;
+        for (index, entry) in entries.iter().enumerate() {
+            let node = entry
+                .get("node")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    ToolError::Invalid(format!("'scripts[{index}].node' must be a string"))
+                })?
+                .to_string();
+            let script = entry
+                .get("script")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    ToolError::Invalid(format!("'scripts[{index}].script' must be a string"))
+                })?
+                .to_string();
+            options
+                .scripts
+                .push(aurum_content::gdscript::ScriptAttachment { node, script });
+        }
+    }
+
+    let problems = aurum_content::gdscript::validate(&options);
+    if !problems.is_empty() {
+        return Err(ToolError::Invalid(problems.join("; ")));
+    }
+
+    let text = aurum_content::gdscript::bake_scene(ctx.engine.content(), &options);
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| ToolError::Io(format!("could not create '{}': {e}", parent.display())))?;
+    }
+    std::fs::write(&destination, &text)
+        .map_err(|e| ToolError::Io(format!("could not write '{}': {e}", destination.display())))?;
+
+    ok(json!({
+        "script_path": destination.display().to_string(),
+        "gltf_path": options.gltf_path,
+        "output_scene": options.output_scene,
+        "root_name": options.root_name,
+        "attachments": options.scripts.len(),
+        "bytes": text.len(),
+        "next": "run it in Godot: godot --headless --script <script_path>",
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // Catalog
 // ---------------------------------------------------------------------------
@@ -1166,6 +1234,38 @@ pub fn catalog() -> Vec<Tool> {
             handler: tool_content_export,
         },
         Tool {
+            name: "aurum_scene_bake",
+            description: "Generate a GDScript that bakes the current content into a real Godot \
+                          .tscn, attaching scripts to named nodes. This is how a script gets \
+                          bound to a node: glTF cannot express it, and Godot owns the scene \
+                          format. Write the glTF with aurum_content_export first, then run the \
+                          generated script in Godot. Node paths in `scripts` are relative to the \
+                          instantiated glTF root, for example \"Hero\" or \"Hero/Orb\".",
+            input_schema: schema(
+                json!({
+                    "gltf_path": { "type": "string", "description": "res:// path of the exported glTF, e.g. res://models/level.gltf" },
+                    "output_scene": { "type": "string", "description": "res:// path for the baked .tscn." },
+                    "script_path": { "type": "string", "description": "Where to write the generated .gd, inside the server root." },
+                    "root_name": { "type": "string", "description": "Name for the scene root (default Scene)." },
+                    "scripts": {
+                        "type": "array",
+                        "description": "Scripts to attach after instantiating.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "node": { "type": "string", "description": "Node path relative to the scene root." },
+                                "script": { "type": "string", "description": "res:// path to the script." }
+                            },
+                            "required": ["node", "script"]
+                        }
+                    }
+                }),
+                json!(["gltf_path", "output_scene", "script_path"]),
+            ),
+            read_only: false,
+            handler: tool_scene_bake,
+        },
+        Tool {
             name: "aurum_sprite_slice",
             description: "Read a real PNG sprite sheet and slice it into frames. Returns the \
                           image size, the grid dimensions, and a rect plus normalised UVs for \
@@ -1251,7 +1351,8 @@ mod tests {
                     || tool.name.starts_with("aurum_node_")
                     || tool.name.starts_with("aurum_material_")
                     || tool.name.starts_with("aurum_animation_")
-                    || tool.name.starts_with("aurum_sprite_"),
+                    || tool.name.starts_with("aurum_sprite_")
+                    || tool.name.starts_with("aurum_scene_"),
                 "unexpected content tool name: {}",
                 tool.name
             );
@@ -1877,6 +1978,95 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("no geometry"), "got: {err}");
+    }
+
+    #[test]
+    fn scene_bake_writes_a_script_naming_the_attachments() {
+        let root = temp_root("bake");
+        let paths = PathGuard::new(&root);
+        let mut engine = Engine::new();
+
+        let mesh = call(
+            &mut engine,
+            &paths,
+            "aurum_mesh_add",
+            json!({"kind": "box"}),
+        )
+        .unwrap();
+        call(
+            &mut engine,
+            &paths,
+            "aurum_node_add",
+            json!({"name": "Hero", "mesh": mesh["index"]}),
+        )
+        .unwrap();
+
+        let out = call(
+            &mut engine,
+            &paths,
+            "aurum_scene_bake",
+            json!({
+                "gltf_path": "res://models/level.gltf",
+                "output_scene": "res://models/level.tscn",
+                "script_path": "gen/bake.gd",
+                "root_name": "Level",
+                "scripts": [{"node": "Hero", "script": "res://scripts/spin.gd"}]
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(out["attachments"], 1);
+        assert_eq!(out["root_name"], "Level");
+
+        let written = std::fs::read_to_string(root.join("gen/bake.gd")).unwrap();
+        assert!(written.contains("extends SceneTree"));
+        assert!(written.contains("res://models/level.gltf"));
+        assert!(written.contains("res://models/level.tscn"));
+        assert!(written.contains("\"Hero\": \"res://scripts/spin.gd\""));
+        assert!(written.contains("const ROOT_NAME := \"Level\""));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scene_bake_validates_its_options_and_stays_in_the_root() {
+        let root = temp_root("bake-errors");
+        let paths = PathGuard::new(&root);
+        let mut engine = Engine::new();
+
+        // A scene path that is not a .tscn would produce a file Godot ignores.
+        let err = call(
+            &mut engine,
+            &paths,
+            "aurum_scene_bake",
+            json!({"gltf_path": "res://a.gltf", "output_scene": "res://a.txt", "script_path": "b.gd"}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains(".tscn"), "got: {err}");
+
+        // A script path outside res:// cannot be loaded by Godot.
+        let err = call(
+            &mut engine,
+            &paths,
+            "aurum_scene_bake",
+            json!({
+                "gltf_path": "res://a.gltf", "output_scene": "res://a.tscn", "script_path": "b.gd",
+                "scripts": [{"node": "N", "script": "user://x.gd"}]
+            }),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("res://"), "got: {err}");
+
+        // Same root guard as every other file tool.
+        let denied = call(
+            &mut engine,
+            &paths,
+            "aurum_scene_bake",
+            json!({"gltf_path": "res://a.gltf", "output_scene": "res://a.tscn", "script_path": "../escape.gd"}),
+        );
+        assert!(matches!(denied, Err(ToolError::Denied(_))));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
