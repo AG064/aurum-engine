@@ -1,0 +1,12 @@
+[configuration]
+entry_symbol = "aurum_editor_init"
+compatibility_minimum = "4.6"
+reloadable = true
+
+[libraries]
+windows.debug.x86_64 = "res://addons/aurum_editor/bin/aurum_editor.debug.dll"
+windows.release.x86_64 = "res://addons/aurum_editor/bin/aurum_editor.dll"
+linux.debug.x86_64 = "res://addons/aurum_editor/bin/libaurum_editor.so"
+linux.release.x86_64 = "res://addons/aurum_editor/bin/libaurum_editor.so"
+macos.debug = "res://addons/aurum_editor/bin/libaurum_editor.dylib"
+macos.release = "res://addons/aurum_editor/bin/libaurum_editor.dylib"

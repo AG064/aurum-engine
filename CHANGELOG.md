@@ -87,6 +87,33 @@ project adheres to [Semantic Versioning](https://semver.org/).
   script in Godot 4.7, and assert the `.tscn` references the script and carries
   it on the right node, with the hierarchy and animation intact.
 
+- **`aurum-editor`** — a GDExtension exposing a deliberately small, stable
+  native surface for driving the live Godot editor: create a node, set a
+  property, attach a script, remove, reparent, describe, and save. All higher
+  level tool composition stays in `aurum-mcp`, which is plain Rust and rebuilds
+  freely, so adding a tool never changes the Godot-facing surface and never
+  costs an editor restart, per the Phase 0 reload boundary.
+
+  A separate crate rather than an addition to `aurum-godot`, so the Phase 0
+  verified game shim stays frozen and editor code never ships in a game build.
+
+  Bridge transport is a polled directory of JSON files, not a socket: Godot is
+  not thread-safe, so a socket would need a worker thread plus a main-thread
+  hand-off queue for latency an editor does not care about.
+
+- **`godot/addons/aurum_editor/`** — the thin GDScript `EditorPlugin`. It
+  supplies only the three things that genuinely need the editor context (the
+  edited scene root, plugin lifecycle, per-frame pump), because gdext 0.5.4
+  gates `EditorPlugin` behind `experimental-godot-api` and enabling that would
+  change the build of the Phase 0-verified shim.
+
+- **`aurum_editor_status` / `aurum_editor_op`** — the MCP tools for the above,
+  with a `--editor-bridge` server option.
+
+- **`scripts/tests/editor_plugin.ps1`** — headless gate that builds the
+  extension, registers it in a scratch project, and exercises every primitive
+  against a real Godot scene tree, including the file bridge round trip.
+
 ### Fixed
 
 - `PathGuard` denied every path when the root was relative, so

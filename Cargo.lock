@@ -46,6 +46,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aurum-editor"
+version = "0.1.0"
+dependencies = [
+ "godot",
+ "serde_json",
+]
+
+[[package]]
 name = "aurum-godot"
 version = "0.1.0"
 dependencies = [

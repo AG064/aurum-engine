@@ -59,7 +59,7 @@ Point it at the absolute path to `aurum.exe` if it is not on your `PATH`.
 
 ## Tools
 
-50 tools, all prefixed `aurum_`. Every read-only tool carries the
+52 tools, all prefixed `aurum_`. Every read-only tool carries the
 `readOnlyHint` annotation, so a client can filter without a second code path.
 
 They split into a **runtime** group (31 tools: entities, components, events,
@@ -125,6 +125,42 @@ Two conventions matter when scripting this:
 sprite a `color` and it also composes a placeholder PNG, which is enough to
 block out a UI before real art exists. The PNG encoder is written against
 DEFLATE stored blocks, so it needs no compression crate.
+
+### Driving the live editor
+
+`aurum_editor_status` and `aurum_editor_op` reach the scene open in the Godot
+editor, through the `AurumEditor` GDExtension and its plugin.
+
+```
+aurum mcp --root . --editor-bridge <dir>   # the plugin prints <dir> on startup
+```
+
+The bridge is a directory pair the plugin polls once per frame rather than a
+socket: Godot is not thread-safe, so a socket would need a worker thread plus a
+main-thread hand-off queue for latency nobody needs in an editor.
+
+**One op tool, not one tool per primitive.** The op names below *are* the
+stable native surface, so mirroring them individually here would duplicate a
+contract already stated on the other side — and the point of keeping that
+surface small is that changing a tool never costs an editor restart.
+
+| op | arguments |
+|---|---|
+| `describe_scene` | — |
+| `node_count` | — |
+| `create_node` | `parent`, `type`, `name` |
+| `set_property` | `node`, `property`, `value` |
+| `attach_script` | `node`, `script` |
+| `remove_node` | `node` |
+| `reparent_node` | `node`, `parent` |
+
+Node paths are relative to the edited scene root; `"."` is the root itself.
+`set_property` reads the property's existing type first, so
+`{"x": 1, "y": 2, "z": 3}` assigns a `Vector3` rather than failing as a
+Dictionary.
+
+Without `--editor-bridge`, both tools still work and simply explain how to
+configure one.
 
 ### Baking a Godot scene
 

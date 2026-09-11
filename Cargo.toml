@@ -12,6 +12,7 @@ members = [
     "crates/aurum-cli",
     "crates/aurum-mcp",
     "crates/aurum-content",
+    "crates/aurum-editor",
 ]
 
 [workspace.package]

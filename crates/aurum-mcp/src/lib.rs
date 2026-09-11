@@ -35,6 +35,7 @@
 
 pub mod cli;
 pub mod content_tools;
+pub mod editor_tools;
 pub mod engine;
 pub mod protocol;
 pub mod server;

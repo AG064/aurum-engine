@@ -49,6 +49,9 @@ pub(crate) type ToolResult = Result<Value, ToolError>;
 pub struct ToolContext<'a> {
     pub engine: &'a mut Engine,
     pub paths: &'a PathGuard,
+    /// Where the live-editor bridge lives, when the server was started with
+    /// one. `None` means the editor tools explain how to configure it.
+    pub editor_bridge: Option<&'a Path>,
 }
 
 /// The signature every tool handler implements.
@@ -1168,6 +1171,7 @@ pub fn catalog() -> Vec<Tool> {
         },
     ];
     tools.extend(crate::content_tools::catalog());
+    tools.extend(crate::editor_tools::catalog());
     tools
 }
 
@@ -1211,7 +1215,11 @@ mod tests {
 
     fn call(engine: &mut Engine, paths: &PathGuard, name: &str, args: Value) -> ToolResult {
         let tool = find(name).expect("tool exists");
-        let mut ctx = ToolContext { engine, paths };
+        let mut ctx = ToolContext {
+            engine,
+            paths,
+            editor_bridge: None,
+        };
         (tool.handler)(&mut ctx, &args)
     }
 

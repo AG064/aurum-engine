@@ -13,7 +13,7 @@ use crate::protocol::{self, failure, parse_incoming, success, Incoming, RpcError
 use crate::tools::{self, PathGuard, ToolContext};
 
 /// How the server should behave for this session.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ServerConfig {
     /// When true, mutating tools are refused and omitted from `tools/list`.
     ///
@@ -22,6 +22,8 @@ pub struct ServerConfig {
     pub read_only: bool,
     /// Echo protocol traffic to stderr for debugging.
     pub trace: bool,
+    /// Directory the live-editor bridge polls, from `--editor-bridge`.
+    pub editor_bridge: Option<std::path::PathBuf>,
 }
 
 /// Serve MCP over `reader`/`writer` until end of input.
@@ -45,7 +47,7 @@ pub fn serve<R: BufRead, W: Write>(
         }
 
         let response = match parse_incoming(&line) {
-            Ok(message) => handle(message, engine, paths, config),
+            Ok(message) => handle(message, engine, paths, &config),
             // A parse failure has no id to echo, so the reply carries null.
             Err(error) => Some(failure(Value::Null, &error)),
         };
@@ -87,7 +89,7 @@ fn handle(
     message: Incoming,
     engine: &mut Engine,
     paths: &PathGuard,
-    config: ServerConfig,
+    config: &ServerConfig,
 ) -> Option<Value> {
     let (id, method, params) = match message {
         Incoming::Request { id, method, params } => (Some(id), method, params),
@@ -131,7 +133,7 @@ fn handle(
 fn call_tool(
     engine: &mut Engine,
     paths: &PathGuard,
-    config: ServerConfig,
+    config: &ServerConfig,
     params: &Value,
 ) -> Result<Value, RpcError> {
     let name = params
@@ -150,7 +152,11 @@ fn call_tool(
 
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
 
-    let mut ctx = ToolContext { engine, paths };
+    let mut ctx = ToolContext {
+        engine,
+        paths,
+        editor_bridge: config.editor_bridge.as_deref(),
+    };
     let outcome = (tool.handler)(&mut ctx, &arguments);
 
     // Tool failures are results, not transport errors: the model must be able
@@ -279,6 +285,7 @@ mod tests {
         let config = ServerConfig {
             read_only: true,
             trace: false,
+            editor_bridge: None,
         };
         let out = run_session(
             &[
@@ -316,6 +323,7 @@ mod tests {
             ServerConfig {
                 read_only: true,
                 trace: false,
+                editor_bridge: None,
             },
         );
         let all_n = all[0]["result"]["tools"].as_array().unwrap().len();

@@ -26,6 +26,9 @@ OPTIONS:
                     Defaults to the current working directory.
     --read-only     Refuse mutating tools and omit them from tools/list.
     --trace         Echo protocol traffic to stderr.
+    --editor-bridge <DIR>
+                    Directory the Aurum Editor plugin polls, enabling the
+                    aurum_editor_* tools. The plugin prints the path it uses.
     -h, --help      Print this help.
     -V, --version   Print the version.
 
@@ -64,6 +67,13 @@ pub fn parse_args_slice(args: &[String]) -> Result<Option<Options>, String> {
             }
             "--read-only" => config.read_only = true,
             "--trace" => config.trace = true,
+            "--editor-bridge" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--editor-bridge requires a directory argument".to_string())?;
+                config.editor_bridge = Some(crate::editor_tools::resolve_bridge(value));
+            }
             "--root" => {
                 index += 1;
                 let value = args
@@ -77,6 +87,11 @@ pub fn parse_args_slice(args: &[String]) -> Result<Option<Options>, String> {
                         return Err("--root requires a directory argument".into());
                     }
                     root = Some(PathBuf::from(value));
+                } else if let Some(value) = other.strip_prefix("--editor-bridge=") {
+                    if value.is_empty() {
+                        return Err("--editor-bridge requires a directory argument".into());
+                    }
+                    config.editor_bridge = Some(crate::editor_tools::resolve_bridge(value));
                 } else {
                     return Err(format!("unknown argument: {other}"));
                 }
@@ -204,5 +219,24 @@ mod tests {
         assert!(parse(&["--nope"]).is_err());
         assert!(parse(&["--root"]).is_err());
         assert!(parse(&["--root="]).is_err());
+        assert!(parse(&["--editor-bridge"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_editor_bridge_in_both_forms() {
+        let o = parse(&["--editor-bridge", "E:/bridge"]).unwrap().unwrap();
+        assert_eq!(o.config.editor_bridge, Some(PathBuf::from("E:/bridge")));
+
+        let o = parse(&["--editor-bridge=E:/bridge/requests"])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            o.config.editor_bridge,
+            Some(PathBuf::from("E:/bridge")),
+            "a subdirectory should normalize to the bridge root"
+        );
+
+        // Absent by default, so the editor tools explain themselves.
+        assert!(parse(&[]).unwrap().unwrap().config.editor_bridge.is_none());
     }
 }

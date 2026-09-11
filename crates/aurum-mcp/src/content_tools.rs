@@ -1315,7 +1315,11 @@ mod tests {
 
     fn call(engine: &mut Engine, paths: &PathGuard, name: &str, args: Value) -> ToolResult {
         let tool = find(name).expect("tool exists");
-        let mut ctx = ToolContext { engine, paths };
+        let mut ctx = ToolContext {
+            engine,
+            paths,
+            editor_bridge: None,
+        };
         (tool.handler)(&mut ctx, &args)
     }
 
