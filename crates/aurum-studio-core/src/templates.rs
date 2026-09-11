@@ -246,10 +246,10 @@ fn render(name: &str, crate_name: &str, engine: &Path) -> Vec<(&'static str, Str
         ),
         (
             "godot/scripts/aurum_runtime.gd",
-            "; The handle a scene uses to reach the engine.\n\
-             ;\n\
-             ; The autoload exists so scripts never look the node up by path:\n\
-             ; moving it in the scene tree cannot break them.\n\
+            "# The handle a scene uses to reach the engine.\n\
+             #\n\
+             # The autoload exists so scripts never look the node up by path:\n\
+             # moving it in the scene tree cannot break them.\n\
              extends AurumNode\n"
                 .to_string(),
         ),
