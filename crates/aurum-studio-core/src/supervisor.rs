@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use crate::build::{BuildError, BuildReport, BuildRequest, Profile};
 use crate::build_queue::{BuildLock, LockError};
-use crate::doctor::Health;
+use crate::doctor::{Finding, Health, Report};
 use crate::ownership::ProcessKind;
 use crate::project::Project;
 use crate::reload::Verdict;
@@ -61,10 +61,15 @@ pub enum Command {
 /// Something that happened.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    /// A health report.
+    /// A health report, with every finding behind the verdict.
+    ///
+    /// The findings travel with the verdict rather than being fetched
+    /// separately, so a shell cannot end up showing a verdict whose reasons it
+    /// never received. They arrive problems-first: see [`findings_worst_first`].
     Health {
         verdict: Health,
         summary: String,
+        findings: Vec<Finding>,
     },
     BuildStarted {
         package: String,
@@ -107,7 +112,9 @@ impl Event {
     /// A short line for a log view.
     pub fn describe(&self) -> String {
         match self {
-            Self::Health { verdict, summary } => {
+            Self::Health {
+                verdict, summary, ..
+            } => {
                 format!("health: {} ({summary})", verdict.label())
             }
             Self::BuildStarted { package, profile } => format!("building {package} ({profile})"),
@@ -346,6 +353,7 @@ fn run(config: SupervisorConfig, inbox: Receiver<Command>, events: &Queue) {
                         report.count(Health::Warning),
                         report.count(Health::Blocked)
                     ),
+                    findings: findings_worst_first(&report),
                 });
             }
 
@@ -532,6 +540,28 @@ fn push_build_success(events: &Queue, report: &BuildReport) {
     });
 }
 
+/// Every finding, problems first.
+///
+/// The rendered report keeps discovery order, because reading a fixed list is
+/// how a person notices that a check they expected is missing. A panel that is
+/// glanced at has the opposite need: whatever must be acted on should be the
+/// first thing read, and healthy checks are reassurance that can wait behind
+/// them. Problems come worst-first from [`Report::problems`]; the healthy ones
+/// follow in the order they were checked.
+fn findings_worst_first(report: &Report) -> Vec<Finding> {
+    report
+        .problems()
+        .into_iter()
+        .chain(
+            report
+                .findings
+                .iter()
+                .filter(|finding| finding.health == Health::Healthy),
+        )
+        .cloned()
+        .collect()
+}
+
 fn describe_build_error(error: &BuildError) -> String {
     match error {
         // Cargo's own output is many lines; the first names the failure.
@@ -576,7 +606,8 @@ mod tests {
         assert!(!Event::Error("x".into()).is_droppable());
         assert!(!Event::Health {
             verdict: Health::Healthy,
-            summary: "s".into()
+            summary: "s".into(),
+            findings: Vec::new(),
         }
         .is_droppable());
         assert!(!Event::ProcessStopped {
@@ -816,16 +847,75 @@ mod tests {
         let event = wait_for(&supervisor, |e| matches!(e, Event::Health { .. }))
             .expect("doctor should report health");
         match event {
-            Event::Health { summary, .. } => {
+            Event::Health {
+                summary, findings, ..
+            } => {
                 assert!(
                     summary.contains("ok"),
                     "the summary should count findings, got '{summary}'"
                 );
+                // The verdict is useless without its reasons, so the reasons
+                // travel with it rather than being asked for again.
+                assert!(
+                    findings.iter().any(|finding| finding.id == "config"),
+                    "every check should reach the shell, got {findings:?}"
+                );
+                assert_problems_come_first(&findings);
             }
             other => panic!("expected health, got {other:?}"),
         }
 
         supervisor.shutdown();
+    }
+
+    /// Assert that no healthy check is listed before a problem.
+    fn assert_problems_come_first(findings: &[Finding]) {
+        let first_healthy = findings
+            .iter()
+            .position(|finding| finding.health == Health::Healthy);
+        let last_problem = findings
+            .iter()
+            .rposition(|finding| finding.health != Health::Healthy);
+        if let (Some(first_healthy), Some(last_problem)) = (first_healthy, last_problem) {
+            assert!(
+                last_problem < first_healthy,
+                "a problem below the healthy checks is one nobody reads: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn findings_are_ordered_worst_first_behind_the_verdict() {
+        let finding = |id: &'static str, health: Health| Finding {
+            id,
+            health,
+            summary: format!("{id} summary"),
+            evidence: None,
+            remedy: None,
+        };
+        let report = Report {
+            project_root: PathBuf::from("/project"),
+            name: "test".into(),
+            // Discovery order: the healthy checks are found first, which is
+            // exactly the order a panel must not use.
+            findings: vec![
+                finding("config", Health::Healthy),
+                finding("cargo", Health::Healthy),
+                finding("addon", Health::Warning),
+                finding("cargo_manifest", Health::Blocked),
+                finding("rustc", Health::Healthy),
+            ],
+        };
+
+        let ordered: Vec<&str> = findings_worst_first(&report)
+            .iter()
+            .map(|finding| finding.id)
+            .collect();
+        assert_eq!(
+            ordered,
+            vec!["cargo_manifest", "addon", "config", "cargo", "rustc"],
+            "the blocked check should lead, and healthy checks keep their order"
+        );
     }
 
     #[test]

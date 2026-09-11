@@ -322,8 +322,11 @@ body {
 /* The verdict, at the scale of the thing it reports on. */
 .health {
   flex: none;
+  /* Wide enough for a path and a remedy on one line, and no wider: the
+     identity beside it is the larger statement, and a diagnostics list that
+     stretched across the page would compete with it. */
+  width: clamp(300px, 40vw, 520px);
   text-align: right;
-  min-width: 210px;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -412,6 +415,212 @@ body {
 .summary {
   font-size: 12.5px;
   color: var(--ink-dim);
+}
+
+/* -- the reasons behind the verdict --------------------------------------- */
+
+/* Everything under the verdict lives in one bounded, scrolling area. Bounding
+   it here rather than on each list is what keeps the window a shell: however
+   many problems a project has, and whether or not the healthy checks are
+   unfolded, the verdict stays where it is and the console keeps its floor. */
+.diagnostics {
+  width: 100%;
+  max-height: min(38vh, 340px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #2b313a transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+/* The findings are a list, not a table: each row is read once, on the way to
+   the one row that has something to do. */
+.findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.finding {
+  /* A hairline in the row's own colour, the way the verdict carries its own.
+     A tint spread over the whole tile would stop reading as a signal, and gold
+     spread thin stops reading as gold. */
+  border-left: 2px solid var(--edge-lit);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  padding: 7px 12px 8px 11px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.035),
+    rgba(255, 255, 255, 0) 72%
+  );
+  animation: slide var(--slow) var(--ease) both;
+}
+
+.finding-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.finding-id {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.finding-summary {
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--ink-mid);
+}
+
+/* The fact behind the verdict: a path, a version, an exit code. Monospaced
+   because it is quoted from the machine, and it must not look like prose. */
+.finding-evidence {
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+  word-break: break-word;
+}
+
+/* The most useful text on the page, so it is the only text here in the
+   accent. An arrow marks it as an instruction rather than more evidence. */
+.finding-remedy {
+  position: relative;
+  margin-top: 3px;
+  padding-left: 15px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--gold);
+}
+
+.finding-remedy::before {
+  content: "\2192";
+  position: absolute;
+  left: 0;
+  color: var(--gold);
+  opacity: 0.7;
+}
+
+/* The level classes are the strings `Health::label()` emits. A test in
+   assets.rs keeps the two in step, for findings as well as the verdict. */
+.finding.blocked {
+  border-left-color: rgba(228, 109, 97, 0.85);
+  background: linear-gradient(
+    90deg,
+    rgba(228, 109, 97, 0.12),
+    rgba(228, 109, 97, 0) 74%
+  );
+}
+
+.finding.blocked .finding-id {
+  color: var(--bad);
+}
+
+/* Brighter than a healthy row's summary, because a blocker is the one line
+   on this page that has to be impossible to miss. */
+.finding.blocked .finding-summary {
+  color: var(--ink);
+}
+
+.finding.warning {
+  border-left-color: rgba(226, 180, 88, 0.6);
+  background: linear-gradient(
+    90deg,
+    rgba(226, 180, 88, 0.08),
+    rgba(226, 180, 88, 0) 74%
+  );
+}
+
+.finding.warning .finding-id {
+  color: var(--warn);
+}
+
+.finding.ok {
+  border-left-color: rgba(102, 196, 126, 0.3);
+  background: rgba(255, 255, 255, 0.014);
+}
+
+.finding.ok .finding-id {
+  color: rgba(102, 196, 126, 0.72);
+}
+
+.finding.ok .finding-summary {
+  color: var(--ink-dim);
+}
+
+/* Eleven green lines say only what the count already said, so they are folded
+   away. The count stays visible, because "eleven checks ran" and "nothing was
+   found" are different statements. */
+.healthy {
+  width: 100%;
+  text-align: left;
+}
+
+.healthy-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 11px 4px 9px;
+  cursor: pointer;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--ink-faint);
+  list-style: none;
+  transition:
+    color var(--fast) var(--ease),
+    border-color var(--fast) var(--ease);
+}
+
+.healthy-toggle::-webkit-details-marker {
+  display: none;
+}
+
+/* Our own disclosure mark, drawn from borders rather than fetched. */
+.healthy-toggle::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  transition: transform var(--fast) var(--ease);
+}
+
+.healthy[open] .healthy-toggle::before {
+  transform: rotate(90deg);
+}
+
+.healthy-toggle:hover {
+  color: var(--ink-mid);
+  border-color: var(--edge-gold);
+}
+
+.healthy-toggle:focus-visible {
+  outline: none;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(216, 169, 79, 0.24);
+}
+
+.healthy .findings {
+  margin-top: 6px;
 }
 
 /* -- apparatus ----------------------------------------------------------- */
@@ -903,6 +1112,7 @@ footer {
     align-items: flex-start;
   }
   .health {
+    width: 100%;
     align-items: flex-start;
     text-align: left;
   }

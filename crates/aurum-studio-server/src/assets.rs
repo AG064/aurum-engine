@@ -81,16 +81,31 @@ mod tests {
     }
 
     #[test]
-    fn the_stylesheet_styles_every_health_verdict() {
-        // The verdict reaches the page as `Health::label()`, so the class the
-        // page builds and the class the stylesheet defines must be the same
-        // string. They were not, and only running it said so.
+    fn the_stylesheet_styles_every_health_label_that_reaches_the_page() {
+        // A level reaches the page as `Health::label()`, so the class the page
+        // builds and the class the stylesheet defines must be the same string.
+        // They were not once, and only running it said so. Every surface that
+        // shows a level is held to it: the verdict, and each finding row.
         use aurum_studio_core::doctor::Health;
         for health in [Health::Healthy, Health::Warning, Health::Blocked] {
-            let selector = format!(".verdict.{}", health.label());
+            for surface in ["verdict", "finding"] {
+                let selector = format!(".{surface}.{}", health.label());
+                assert!(
+                    STYLE_CSS.contains(&selector),
+                    "the stylesheet should define '{selector}'"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_script_renders_the_findings_behind_a_verdict() {
+        // The panel was one word and a count until the findings were carried
+        // through; a verdict with nothing behind it is not a diagnosis.
+        for marker in ["event.findings", "finding.health", "finding.remedy"] {
             assert!(
-                STYLE_CSS.contains(&selector),
-                "the stylesheet should define '{selector}'"
+                APP_JS.contains(marker),
+                "the script should read '{marker}' rather than only the verdict"
             );
         }
     }

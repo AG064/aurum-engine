@@ -658,10 +658,24 @@ fn stream_events(
 pub fn event_json(event: &Event) -> serde_json::Value {
     use serde_json::json;
     match event {
-        Event::Health { verdict, summary } => json!({
+        Event::Health {
+            verdict,
+            summary,
+            findings,
+        } => json!({
             "kind": "health",
             "verdict": verdict.label(),
             "summary": summary,
+            "findings": findings
+                .iter()
+                .map(|finding| json!({
+                    "id": finding.id,
+                    "health": finding.health.label(),
+                    "summary": finding.summary,
+                    "evidence": finding.evidence,
+                    "remedy": finding.remedy,
+                }))
+                .collect::<Vec<serde_json::Value>>(),
         }),
         Event::BuildStarted { package, profile } => json!({
             "kind": "build-started",
@@ -904,6 +918,7 @@ mod tests {
             Event::Health {
                 verdict: aurum_studio_core::doctor::Health::Healthy,
                 summary: "s".into(),
+                findings: Vec::new(),
             },
             Event::BuildStarted {
                 package: "p".into(),
@@ -938,6 +953,53 @@ mod tests {
                 "{event:?} needs a kind"
             );
         }
+    }
+
+    #[test]
+    fn a_health_event_carries_every_finding_to_the_page() {
+        use aurum_studio_core::doctor::{Finding, Health};
+
+        // In the order the supervisor sends them: problems first.
+        let event = Event::Health {
+            verdict: Health::Blocked,
+            summary: "9 ok, 0 warnings, 1 blocked".into(),
+            findings: vec![
+                Finding {
+                    id: "cargo_manifest",
+                    health: Health::Blocked,
+                    summary: "no Cargo.toml at the project root".into(),
+                    evidence: None,
+                    remedy: Some("add a workspace manifest".into()),
+                },
+                Finding {
+                    id: "cargo",
+                    health: Health::Healthy,
+                    summary: "Cargo available".into(),
+                    evidence: Some("/tools/cargo (1.95.0)".into()),
+                    remedy: None,
+                },
+            ],
+        };
+
+        let json = event_json(&event);
+        assert_eq!(json["kind"], "health");
+        assert_eq!(json["verdict"], "blocked");
+        assert_eq!(json["summary"], "9 ok, 0 warnings, 1 blocked");
+
+        let findings = json["findings"]
+            .as_array()
+            .expect("the findings should be a list the page can walk");
+        assert_eq!(findings.len(), 2, "no finding may be dropped on the way out");
+        assert_eq!(findings[0]["id"], "cargo_manifest");
+        assert_eq!(findings[0]["health"], "blocked");
+        assert_eq!(findings[0]["summary"], "no Cargo.toml at the project root");
+        assert_eq!(findings[0]["remedy"], "add a workspace manifest");
+        assert!(
+            findings[0]["evidence"].is_null(),
+            "a finding with nothing to show says so rather than inventing it"
+        );
+        assert_eq!(findings[1]["evidence"], "/tools/cargo (1.95.0)");
+        assert!(findings[1]["remedy"].is_null());
     }
 
     #[test]

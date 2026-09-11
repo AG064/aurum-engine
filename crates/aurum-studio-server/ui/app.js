@@ -86,13 +86,53 @@
     if (atBottom) log.scrollTop = log.scrollHeight;
   }
 
+  // One finding as the core reports it: what was checked, what was found, and
+  // what to do about it. Every value is set as text and never as markup —
+  // evidence is a path or a tool's own output, and none of it is ours to trust.
+  function findingRow(finding) {
+    const row = document.createElement('li');
+    // The class is the label the core emits, so the stylesheet has to name the
+    // same string. A test in assets.rs holds the two together.
+    row.className = 'finding ' + finding.health;
+
+    const head = document.createElement('div');
+    head.className = 'finding-head';
+
+    const id = document.createElement('code');
+    id.className = 'finding-id';
+    id.textContent = finding.id;
+
+    const summary = document.createElement('span');
+    summary.className = 'finding-summary';
+    summary.textContent = finding.summary;
+
+    head.append(id, summary);
+    row.append(head);
+
+    if (finding.evidence) {
+      const evidence = document.createElement('div');
+      evidence.className = 'finding-evidence';
+      evidence.textContent = finding.evidence;
+      row.append(evidence);
+    }
+
+    // The remedy is the one line here somebody can act on, so it is marked as
+    // an instruction rather than left to read as more detail.
+    if (finding.remedy) {
+      const remedy = document.createElement('div');
+      remedy.className = 'finding-remedy';
+      remedy.textContent = finding.remedy;
+      row.append(remedy);
+    }
+
+    return row;
+  }
+
   function renderHealth(event) {
     health.classList.remove('empty');
     health.replaceChildren();
 
     const verdict = document.createElement('div');
-    // The class is the label the core emits, so the stylesheet has to name the
-    // same string. A test in assets.rs holds the two together.
     verdict.className = 'verdict ' + event.verdict;
     verdict.textContent = event.verdict;
 
@@ -101,6 +141,49 @@
     summary.textContent = event.summary;
 
     health.append(verdict, summary);
+
+    const findings = Array.isArray(event.findings) ? event.findings : [];
+    if (!findings.length) return;
+
+    // Everything below the verdict shares one bounded, scrolling area, so a
+    // long list of problems and an expanded list of healthy checks cannot
+    // between them push the console off the bottom of the window.
+    const diagnostics = document.createElement('div');
+    diagnostics.className = 'diagnostics';
+
+    // Problems first, worst first. That order comes from the core, which is
+    // where the levels are ranked, and it is the order that matters: a blocked
+    // finding below a stack of green lines is one nobody reads.
+    const problems = findings.filter((finding) => finding.health !== 'ok');
+    if (problems.length) {
+      const list = document.createElement('ul');
+      list.className = 'findings';
+      for (const problem of problems) list.append(findingRow(problem));
+      diagnostics.append(list);
+    }
+
+    // The healthy checks are kept, because "eleven checks ran" is a different
+    // statement from "nothing was found", and folded away, because eleven
+    // lines of reassurance would push the one that matters off the panel.
+    const healthy = findings.filter((finding) => finding.health === 'ok');
+    if (healthy.length) {
+      const quiet = document.createElement('details');
+      quiet.className = 'healthy';
+
+      const toggle = document.createElement('summary');
+      toggle.className = 'healthy-toggle';
+      toggle.textContent =
+        healthy.length === 1 ? '1 check passed' : healthy.length + ' checks passed';
+
+      const list = document.createElement('ul');
+      list.className = 'findings';
+      for (const check of healthy) list.append(findingRow(check));
+
+      quiet.append(toggle, list);
+      diagnostics.append(quiet);
+    }
+
+    health.append(diagnostics);
   }
 
   // -- requests ----------------------------------------------------------
