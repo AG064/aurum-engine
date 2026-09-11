@@ -22,6 +22,8 @@
 //! - [`process`] — running children with capture and a bounded wait
 //! - [`ownership`] — proving a process is the one Studio launched
 //! - [`reload`] — what a change costs the running editor
+//! - [`session`] — session identity, state directory, and logs
+//! - [`supervise`] — launching and stopping the processes a session owns
 //! - [`hash`] — SHA-256, for verifying artifacts
 //!
 //! ## Dependency policy
@@ -40,8 +42,11 @@ pub mod hash;
 pub mod ownership;
 pub mod process;
 pub mod project;
+pub mod random;
 pub mod registry;
 pub mod reload;
+pub mod session;
+pub mod supervise;
 pub mod toml;
 pub mod toolchain;
 
@@ -51,6 +56,9 @@ pub use hash::{sha256_file, sha256_hex, Sha256};
 pub use ownership::{LiveProcess, OwnershipRecord, ProcessKind};
 pub use process::{Command, Outcome};
 pub use project::{clean_path, ConfigError, Layout, Project, ProjectConfig};
+pub use random::Source as RandomSource;
 pub use registry::{Entry, Registry, RegistryError};
 pub use reload::{classify_all, classify_change, classify_path, Classification, Verdict};
+pub use session::{redact, Session};
+pub use supervise::{launch, stop_session, terminate, LaunchRequest, StopOutcome};
 pub use toolchain::{Tool, Toolchain};

@@ -21,6 +21,9 @@ COMMANDS:
                           blocked state with evidence.
     build [project]       Build the GDExtension and install it. A failed build
                           leaves the installed library untouched.
+    editor [project]      Launch Godot on the project, supervised.
+    run [project]         Launch the project's game, supervised.
+    stop [project]        Stop the processes this project's session launched.
     import <path>         Register a project (read-only against the project).
     projects              List registered projects.
     forget <name|path>    Remove a project from the registry.
@@ -45,6 +48,9 @@ fn main() -> ExitCode {
         Some("mcp") => ExitCode::from(aurum_mcp::cli::run(&args[1..]) as u8),
         Some("doctor") => commands::doctor(&args[1..]),
         Some("build") => commands::build(&args[1..]),
+        Some("editor") => commands::editor(&args[1..]),
+        Some("run") => commands::run(&args[1..]),
+        Some("stop") => commands::stop(&args[1..]),
         Some("import") => commands::import(&args[1..]),
         Some("projects") => commands::projects(&args[1..]),
         Some("forget") => commands::forget(&args[1..]),

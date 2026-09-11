@@ -94,6 +94,21 @@ fn is_executable(path: &Path) -> bool {
 /// The Godot executable names Studio will accept.
 const GODOT_NAMES: &[&str] = &["godot", "godot4", "Godot"];
 
+/// Which build of Godot to prefer when several are present.
+///
+/// Godot ships a windowed build and a console build with identical engines.
+/// Which one is right depends on what it is for, and the difference is not
+/// cosmetic: a console process has no window, so `taskkill` cannot ask it to
+/// close and must terminate it forcefully. Launching an editor with the
+/// console build therefore means every stop discards unsaved work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GodotFlavor {
+    /// Preferred for probing, where captured stdout makes the version legible.
+    PreferConsole,
+    /// Preferred for launching, where a window is what allows a polite close.
+    PreferWindowed,
+}
+
 /// Find Godot, in order of how much the caller knows.
 ///
 /// 1. An explicit path, which is authoritative.
@@ -101,17 +116,23 @@ const GODOT_NAMES: &[&str] = &["godot", "godot4", "Godot"];
 /// 3. A `godot/` directory beside the project, which is the layout an engine
 ///    checkout uses when it keeps a pinned editor next to itself.
 /// 4. A `godot/` directory inside the project.
-pub fn discover_godot(hint: Option<&Path>, project_root: &Path) -> Option<PathBuf> {
+pub fn discover_godot(
+    hint: Option<&Path>,
+    project_root: &Path,
+    flavor: GodotFlavor,
+) -> Option<PathBuf> {
     if let Some(hint) = hint {
         if hint.is_file() {
             return Some(hint.to_path_buf());
         }
         // A hint naming a directory means "look inside here".
         if hint.is_dir() {
-            if let Some(found) = find_godot_in(hint) {
-                return Some(found);
-            }
+            return find_godot_in(hint, flavor);
         }
+        // An explicit path that does not resolve is an error, not a request to
+        // guess. Falling through here meant a typo silently launched whatever
+        // Godot happened to be on PATH instead of the one that was asked for.
+        return None;
     }
 
     for name in GODOT_NAMES {
@@ -127,7 +148,7 @@ pub fn discover_godot(hint: Option<&Path>, project_root: &Path) -> Option<PathBu
     directories.push(project_root.join("godot"));
 
     for directory in directories {
-        if let Some(found) = find_godot_in(&directory) {
+        if let Some(found) = find_godot_in(&directory, flavor) {
             return Some(found);
         }
     }
@@ -135,10 +156,7 @@ pub fn discover_godot(hint: Option<&Path>, project_root: &Path) -> Option<PathBu
 }
 
 /// Find a Godot executable in one directory.
-///
-/// The console build is preferred on Windows: it is the same editor with a
-/// real stdout, which is what makes captured output useful.
-pub fn find_godot_in(directory: &Path) -> Option<PathBuf> {
+pub fn find_godot_in(directory: &Path, flavor: GodotFlavor) -> Option<PathBuf> {
     let entries = std::fs::read_dir(directory).ok()?;
     let mut candidates: Vec<PathBuf> = entries
         .filter_map(Result::ok)
@@ -161,8 +179,12 @@ pub fn find_godot_in(directory: &Path) -> Option<PathBuf> {
             .and_then(|n| n.to_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let console_rank = if name.contains("console") { 0 } else { 1 };
-        (console_rank, name.len(), name)
+        let is_console = name.contains("console");
+        let flavor_rank = match flavor {
+            GodotFlavor::PreferConsole => usize::from(!is_console),
+            GodotFlavor::PreferWindowed => usize::from(is_console),
+        };
+        (flavor_rank, name.len(), name)
     });
     candidates.into_iter().next()
 }
@@ -225,6 +247,14 @@ pub fn version_satisfies(reported: Option<&str>, required: &str) -> bool {
     }
 }
 
+/// Find the Godot to launch, preferring the build that can be asked to close.
+///
+/// Separate from [`discover`] because the two want opposite things: probing
+/// reads stdout, launching needs a window so a stop can be polite.
+pub fn discover_godot_to_launch(project: &Project, hint: Option<&Path>) -> Option<PathBuf> {
+    discover_godot(hint, &project.root, GodotFlavor::PreferWindowed)
+}
+
 /// Discover the whole toolchain for a project.
 pub fn discover(project: &Project, godot_hint: Option<&Path>) -> Toolchain {
     let mut toolchain = Toolchain::default();
@@ -239,7 +269,7 @@ pub fn discover(project: &Project, godot_hint: Option<&Path>) -> Toolchain {
         tool.version = probe_version(&path, "--version");
         toolchain.rustc = Some(tool);
     }
-    if let Some(path) = discover_godot(godot_hint, &project.root) {
+    if let Some(path) = discover_godot(godot_hint, &project.root, GodotFlavor::PreferConsole) {
         let mut tool = Tool::new(&path);
         tool.version = probe_version(&path, "--version");
         toolchain.godot = Some(tool);
@@ -322,7 +352,7 @@ mod tests {
         .unwrap();
         std::fs::write(directory.join("readme.txt"), b"not a godot").unwrap();
 
-        let found = find_godot_in(&directory).unwrap();
+        let found = find_godot_in(&directory, GodotFlavor::PreferConsole).unwrap();
         assert!(
             found
                 .file_name()
@@ -335,11 +365,38 @@ mod tests {
     }
 
     #[test]
+    fn the_windowed_build_is_preferred_for_launching() {
+        // The distinction matters: only a windowed build can be asked to
+        // close, so launching the console build would make every stop
+        // forceful.
+        let directory = temp_dir("godot-flavor");
+        std::fs::write(directory.join("Godot_v4.7-stable_win64.exe"), b"stub").unwrap();
+        std::fs::write(
+            directory.join("Godot_v4.7-stable_win64_console.exe"),
+            b"stub",
+        )
+        .unwrap();
+
+        let probing = find_godot_in(&directory, GodotFlavor::PreferConsole).unwrap();
+        assert!(probing.to_string_lossy().contains("console"));
+
+        let launching = find_godot_in(&directory, GodotFlavor::PreferWindowed).unwrap();
+        assert!(
+            !launching.to_string_lossy().contains("console"),
+            "got {launching:?}"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
     fn godot_discovery_returns_none_for_a_directory_without_godot() {
         let directory = temp_dir("godot-none");
         std::fs::write(directory.join("something.dll"), b"stub").unwrap();
-        assert_eq!(find_godot_in(&directory), None);
-        assert_eq!(find_godot_in(&directory.join("missing")), None);
+        assert_eq!(find_godot_in(&directory, GodotFlavor::PreferConsole), None);
+        assert_eq!(
+            find_godot_in(&directory.join("missing"), GodotFlavor::PreferConsole),
+            None
+        );
         let _ = std::fs::remove_dir_all(&directory);
     }
 
@@ -352,11 +409,11 @@ mod tests {
         std::fs::write(&hinted, b"stub").unwrap();
 
         let project_root = temp_dir("hint-project");
-        let found = discover_godot(Some(&hinted), &project_root);
+        let found = discover_godot(Some(&hinted), &project_root, GodotFlavor::PreferConsole);
         assert_eq!(found, Some(hinted.clone()));
 
         // A directory hint searches inside it.
-        let found = discover_godot(Some(&directory), &project_root);
+        let found = discover_godot(Some(&directory), &project_root, GodotFlavor::PreferConsole);
         assert_eq!(found, Some(hinted));
 
         let _ = std::fs::remove_dir_all(&directory);
@@ -378,7 +435,7 @@ mod tests {
 
         // No PATH lookup can match a stub file, so this exercises the sibling
         // rule rather than whatever Godot the machine happens to have.
-        let found = discover_godot(None, &project_root);
+        let found = discover_godot(None, &project_root, GodotFlavor::PreferConsole);
         assert!(
             found.as_ref().is_some_and(|p| p.starts_with(&godot_dir)),
             "expected a sibling discovery, got {found:?}"
@@ -387,12 +444,27 @@ mod tests {
     }
 
     #[test]
-    fn a_hint_that_does_not_exist_falls_through() {
+    fn an_explicit_hint_that_does_not_exist_is_not_quietly_ignored() {
         let project_root = temp_dir("bad-hint");
         let missing = project_root.join("nope").join("godot.exe");
-        // Must not panic or return the missing path.
-        let found = discover_godot(Some(&missing), &project_root);
-        assert_ne!(found, Some(missing));
+        // The caller named a Godot. Returning some other one would mean a typo
+        // silently launches a different engine.
+        assert_eq!(
+            discover_godot(Some(&missing), &project_root, GodotFlavor::PreferConsole),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn a_directory_hint_without_godot_does_not_fall_through_either() {
+        let project_root = temp_dir("empty-hint-dir");
+        let empty = project_root.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(
+            discover_godot(Some(&empty), &project_root, GodotFlavor::PreferConsole),
+            None
+        );
         let _ = std::fs::remove_dir_all(&project_root);
     }
 

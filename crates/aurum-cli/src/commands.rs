@@ -5,13 +5,19 @@
 //! deterministic, every report has a machine-readable form, and exit codes
 //! distinguish the states a caller has to branch on.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use aurum_studio_core::build::{library_name, BuildRequest, Profile};
 use aurum_studio_core::doctor::{diagnose, Health};
+use aurum_studio_core::ownership::ProcessKind;
+use aurum_studio_core::project::clean_path;
 use aurum_studio_core::registry::Registry;
-use aurum_studio_core::toolchain::discover;
+use aurum_studio_core::session::Session;
+use aurum_studio_core::supervise::{
+    bridge_environment, launch, stop_session, LaunchRequest, StopOutcome,
+};
+use aurum_studio_core::toolchain::{discover, discover_godot_to_launch};
 use aurum_studio_core::Project;
 
 /// Exit codes callers branch on. Distinguishing "unhealthy" from "broken
@@ -252,6 +258,198 @@ pub fn build(args: &[String]) -> ExitCode {
 /// than waiting.
 const BUILD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
+/// Open a project, its toolchain, and its Godot: the shared prologue.
+fn open_for_launch(options: &Options) -> Result<(Project, PathBuf, PathBuf), (String, ExitCode)> {
+    let path = target(options);
+    let project =
+        Project::open(&path).map_err(|e| (e.to_string(), ExitCode::from(exit::BLOCKED)))?;
+
+    let Some(godot_project) = project.godot_project_dir().map(Path::to_path_buf) else {
+        return Err((
+            "no project.godot was found; there is nothing for Godot to open".into(),
+            ExitCode::from(exit::BLOCKED),
+        ));
+    };
+
+    // An explicit path is an assertion. Silently discovering a different Godot
+    // after the user named one would launch an engine they did not ask for.
+    if let Some(hint) = &options.godot {
+        if !hint.exists() {
+            return Err((
+                format!("the Godot you named does not exist: {}", hint.display()),
+                ExitCode::from(exit::BLOCKED),
+            ));
+        }
+    }
+
+    // The windowed build, not the console one: only a window can be asked to
+    // close politely, and a console process has to be terminated forcefully,
+    // which discards unsaved work.
+    let Some(godot) = discover_godot_to_launch(&project, options.godot.as_deref()) else {
+        return Err((
+            match &options.godot {
+                Some(hint) => format!(
+                    "no Godot executable was found at or under '{}'",
+                    hint.display()
+                ),
+                None => "Godot was not found; pass --godot <path> or put it on PATH".to_string(),
+            },
+            ExitCode::from(exit::BLOCKED),
+        ));
+    };
+
+    Ok((project, godot_project, godot))
+}
+
+/// Launch Godot through a supervised session.
+fn launch_godot(options: &Options, game: bool) -> ExitCode {
+    let (project, godot_project, godot) = match open_for_launch(options) {
+        Ok(parts) => parts,
+        Err((message, code)) => {
+            eprintln!("aurum: {message}");
+            return code;
+        }
+    };
+
+    let session = match Session::create(&project.root) {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("aurum: could not start a session: {error}");
+            return ExitCode::from(exit::FAILED);
+        }
+    };
+
+    let mut request = LaunchRequest::godot(&godot, &godot_project, &project.root);
+    request.kind = if game {
+        ProcessKind::Game
+    } else {
+        ProcessKind::Editor
+    };
+    request.environment = bridge_environment(&session, None);
+    if game {
+        // Godot runs the main scene when the editor flag is absent.
+    }
+
+    match launch(&request, &session) {
+        Ok(launched) => {
+            if options.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "session": session.id,
+                        "pid": launched.pid(),
+                        "kind": launched.record.kind.label(),
+                        "executable": launched.record.executable.display().to_string(),
+                        "project": project.root.display().to_string(),
+                        "log": session.log_path().display().to_string(),
+                    })
+                );
+            } else {
+                println!(
+                    "launched {} (pid {}) for {}",
+                    launched.record.kind.label(),
+                    launched.pid(),
+                    project.config.name
+                );
+                println!("  log: {}", session.log_path().display());
+                println!("  stop with: aurum stop {}", project.config.name);
+            }
+            ExitCode::from(exit::OK)
+        }
+        Err(error) => {
+            eprintln!("aurum: {error}");
+            ExitCode::from(exit::FAILED)
+        }
+    }
+}
+
+/// `aurum editor [project]`
+pub fn editor(args: &[String]) -> ExitCode {
+    match parse(args) {
+        Ok(options) => launch_godot(&options, false),
+        Err(message) => usage("editor", &message),
+    }
+}
+
+/// `aurum run [project]`
+pub fn run(args: &[String]) -> ExitCode {
+    match parse(args) {
+        Ok(options) => launch_godot(&options, true),
+        Err(message) => usage("run", &message),
+    }
+}
+
+/// `aurum stop [project]`
+///
+/// Stops only processes this project's most recent session launched, and only
+/// after proving each one is still the process it recorded.
+pub fn stop(args: &[String]) -> ExitCode {
+    let options = match parse(args) {
+        Ok(options) => options,
+        Err(message) => return usage("stop", &message),
+    };
+    let path = target(&options);
+    let root = path.canonicalize().map(clean_path).unwrap_or(path);
+
+    let Some(session) = Session::latest_for(&root) else {
+        eprintln!("aurum stop: no session was recorded for {}", root.display());
+        return ExitCode::from(exit::WARNING);
+    };
+
+    let outcomes = stop_session(&session, options.force, STOP_TIMEOUT);
+    if outcomes.is_empty() {
+        println!("no processes were running for session {}", session.id);
+        return ExitCode::from(exit::OK);
+    }
+
+    let mut refused = 0;
+    let mut declined = 0;
+    for (kind, outcome) in &outcomes {
+        if options.json {
+            continue;
+        }
+        println!("  {}", outcome.describe(*kind));
+        match outcome {
+            StopOutcome::Refused(_) => refused += 1,
+            StopOutcome::StillRunning => declined += 1,
+            _ => {}
+        }
+    }
+
+    if options.json {
+        let reported: Vec<serde_json::Value> = outcomes
+            .iter()
+            .map(|(kind, outcome)| {
+                serde_json::json!({
+                    "kind": kind.label(),
+                    "outcome": format!("{outcome:?}"),
+                    "description": outcome.describe(*kind),
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({ "session": session.id, "outcomes": reported })
+        );
+    }
+
+    if refused > 0 {
+        eprintln!("aurum stop: {refused} process(es) were left alone; they are not the ones this session launched");
+        return ExitCode::from(exit::FAILED);
+    }
+    if declined > 0 {
+        eprintln!(
+            "aurum stop: {declined} process(es) are still running and did not close; \
+             re-run with --force to terminate them, which discards unsaved work"
+        );
+        return ExitCode::from(exit::WARNING);
+    }
+    ExitCode::from(exit::OK)
+}
+
+/// How long to wait for a process to close before reporting it still running.
+const STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// `aurum projects`
 pub fn projects(args: &[String]) -> ExitCode {
     let options = match parse(args) {
@@ -431,6 +629,9 @@ fn command_usage(command: &str) -> &'static str {
              Builds the GDExtension and installs it. A failed build leaves the\n\
              installed library untouched."
         }
+        "editor" => "usage: aurum editor [project] [--godot <path>] [--json]",
+        "run" => "usage: aurum run [project] [--godot <path>] [--json]",
+        "stop" => "usage: aurum stop [project] [--force] [--json]",
         "import" => "usage: aurum import <project-path> [--json]",
         "forget" => "usage: aurum forget <name-or-path>",
         _ => "usage: aurum <command>",
