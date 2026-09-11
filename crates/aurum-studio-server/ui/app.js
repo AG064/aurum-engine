@@ -28,33 +28,80 @@
 
   const $ = (id) => document.getElementById(id);
   const connection = $('connection');
+  const connectionText = connection.querySelector('.connection-text');
+  const project = $('project');
+  const projectValue = project.querySelector('.chip-value');
   const log = $('log');
   const health = $('health');
   const busy = $('busy');
-  const project = $('project');
+  const busyText = busy.querySelector('.status-text');
 
   const MAX_LINES = 500;
+  const EMPTY_LOG = 'Nothing has happened yet.';
+
+  // -- small renderers ---------------------------------------------------
+
+  function setState(state, label) {
+    connection.dataset.state = state;
+    connectionText.textContent = label;
+  }
+
+  function setProject(name) {
+    projectValue.textContent = name || 'project';
+    project.title = name || '';
+  }
+
+  function setBusy(text) {
+    const active = Boolean(text);
+    busy.dataset.active = String(active);
+    busyText.textContent = text || '';
+  }
+
+  function clearEmptyLog() {
+    const placeholder = log.querySelector('.log-empty');
+    if (placeholder) placeholder.remove();
+  }
 
   function say(text, kind) {
+    clearEmptyLog();
+
     const line = document.createElement('li');
     if (kind) line.className = kind;
+
     const time = document.createElement('time');
-    time.textContent = new Date().toLocaleTimeString();
+    time.textContent = new Date().toLocaleTimeString([], { hour12: false });
+
     const body = document.createElement('span');
     body.textContent = text;
+
     line.append(time, body);
 
-    const atBottom =
-      log.scrollTop + log.clientHeight >= log.scrollHeight - 24;
+    // Follow the tail only when the reader is already at the bottom, so a
+    // line arriving never yanks the view away from something being read.
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 28;
     log.append(line);
     while (log.childElementCount > MAX_LINES) log.removeChild(log.firstChild);
     if (atBottom) log.scrollTop = log.scrollHeight;
   }
 
-  function setState(state, label) {
-    connection.dataset.state = state;
-    connection.textContent = label;
+  function renderHealth(event) {
+    health.classList.remove('empty');
+    health.replaceChildren();
+
+    const verdict = document.createElement('div');
+    // The class is the label the core emits, so the stylesheet has to name the
+    // same string. A test in assets.rs holds the two together.
+    verdict.className = 'verdict ' + event.verdict;
+    verdict.textContent = event.verdict;
+
+    const summary = document.createElement('div');
+    summary.className = 'summary';
+    summary.textContent = event.summary;
+
+    health.append(verdict, summary);
   }
+
+  // -- requests ----------------------------------------------------------
 
   async function post(path, body) {
     return fetch(path, {
@@ -67,31 +114,30 @@
     });
   }
 
-  // -- commands ----------------------------------------------------------
-
   document.querySelectorAll('button[data-command]').forEach((button) => {
     button.addEventListener('click', async () => {
       const command = button.dataset.command;
       const extra = button.dataset.args ? JSON.parse(button.dataset.args) : {};
-      busy.textContent = command + ' requested';
+      setBusy(command + ' requested');
       try {
-        const response = await post('/api/command', {
-          command,
-          ...extra,
-        });
+        const response = await post('/api/command', { command, ...extra });
         if (!response.ok) {
-          say(await response.text(), 'bad');
-          busy.textContent = '';
+          say((await response.text()).trim(), 'bad');
+          setBusy('');
         }
       } catch (error) {
         say('could not reach Studio: ' + error, 'bad');
-        busy.textContent = '';
+        setBusy('');
       }
     });
   });
 
   $('clear').addEventListener('click', () => {
     log.replaceChildren();
+    const placeholder = document.createElement('li');
+    placeholder.className = 'log-empty';
+    placeholder.textContent = EMPTY_LOG;
+    log.append(placeholder);
   });
 
   $('shutdown').addEventListener('click', async () => {
@@ -99,23 +145,12 @@
     try {
       await post('/api/stop');
     } catch (error) {
-      /* The server may close the connection before answering. */
+      /* The server may close the connection before it can answer. */
     }
-    say('Studio has been asked to shut down. The page can be closed.', 'note');
+    say('Studio has been asked to shut down. This page can be closed.', 'note');
   });
 
   // -- events ------------------------------------------------------------
-
-  function renderHealth(event) {
-    health.replaceChildren();
-    const verdict = document.createElement('div');
-    verdict.className = 'verdict ' + event.verdict;
-    verdict.textContent = event.verdict;
-    const summary = document.createElement('div');
-    summary.className = 'summary';
-    summary.textContent = event.summary;
-    health.append(verdict, summary);
-  }
 
   function handle(event) {
     switch (event.kind) {
@@ -124,11 +159,11 @@
         say('health: ' + event.verdict + ' — ' + event.summary);
         break;
       case 'build-started':
-        busy.textContent = 'building ' + event.package + ' (' + event.profile + ')';
+        setBusy('building ' + event.package + ' (' + event.profile + ')');
         say('building ' + event.package + ' (' + event.profile + ')', 'note');
         break;
       case 'build-finished':
-        busy.textContent = '';
+        setBusy('');
         say(
           (event.ok ? 'build ok: ' : 'build failed: ') + event.summary,
           event.ok ? 'good' : 'bad'
@@ -147,7 +182,7 @@
         say(event.line);
         break;
       case 'error':
-        busy.textContent = '';
+        setBusy('');
         say(event.message, 'bad');
         break;
       case 'stopped':
@@ -161,11 +196,13 @@
 
   function connect() {
     setState('connecting', 'connecting');
+    // The token rides in the query here rather than a header because
+    // EventSource cannot set one, and it is already out of the address bar.
     const stream = new EventSource('/api/events?t=' + encodeURIComponent(token));
 
     stream.onopen = () => setState('open', 'connected');
     stream.onerror = () => {
-      // EventSource retries on its own; report it rather than giving up.
+      // EventSource retries by itself; report it rather than giving up.
       setState('connecting', 'reconnecting');
     };
     stream.onmessage = (message) => {
@@ -179,16 +216,14 @@
     };
   }
 
-  // A snapshot first, so the page has something to show before the first
-  // event arrives.
+  // A snapshot first, so the page has something to say before the first event
+  // arrives rather than showing an empty shell.
   fetch('/api/state', { headers: { 'X-Aurum-Token': token } })
     .then((response) => response.json())
     .then((state) => {
-      project.textContent = state.project || 'project';
-      say('Studio ' + state.studio + ' ready.');
+      setProject(state.project);
+      say('Studio ' + state.studio + ' · ' + state.root, 'note');
     })
-    .catch(() => {
-      project.textContent = 'project';
-    })
+    .catch(() => setProject(''))
     .finally(connect);
 })();

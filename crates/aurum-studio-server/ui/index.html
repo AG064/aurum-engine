@@ -4,49 +4,126 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark">
 <title>Aurum Studio</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header>
-  <h1>Aurum<span>Studio</span></h1>
-  <div class="project" id="project">connecting</div>
-  <div class="connection" id="connection" data-state="connecting">connecting</div>
-</header>
+<div class="ambient" aria-hidden="true"></div>
 
-<main>
-  <section class="panel" id="controls">
-    <h2>Project</h2>
-    <div class="buttons">
-      <button data-command="doctor">Doctor</button>
-      <button data-command="build">Build</button>
-      <button data-command="build" data-args='{"force":true}'>Rebuild</button>
-      <button data-command="build" data-args='{"release":true}'>Release</button>
+<div class="app">
+  <header class="chrome">
+    <div class="brand">
+      <!-- Inline SVG on purpose: no xmlns, because the page must contain no
+           external reference of any kind. HTML5 puts inline SVG in the right
+           namespace without it. -->
+      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
+        <defs>
+          <linearGradient id="aurum" x1="0" y1="0" x2="0.7" y2="1">
+            <stop offset="0" stop-color="#f6d68a"/>
+            <stop offset="0.45" stop-color="#d4a24c"/>
+            <stop offset="1" stop-color="#8a6220"/>
+          </linearGradient>
+        </defs>
+        <path d="M12 1.6 L22 22.4 H17.4 L12 10.1 L6.6 22.4 H2 Z" fill="url(#aurum)"/>
+        <rect x="7.9" y="15.5" width="8.2" height="2.1" rx="1.05" fill="url(#aurum)"/>
+      </svg>
+      <div class="wordmark">Aurum<i>Studio</i></div>
     </div>
-    <h2>Run</h2>
-    <div class="buttons">
-      <button data-command="start-editor">Editor</button>
-      <button data-command="start-game">Game</button>
-      <button data-command="stop" class="warn">Stop</button>
+
+    <div class="project-chip" id="project">
+      <span class="chip-label">Project</span>
+      <span class="chip-value">opening</span>
     </div>
-    <p class="note" id="busy"></p>
-  </section>
 
-  <section class="panel" id="health-panel">
-    <h2>Health</h2>
-    <div id="health" class="muted">not checked yet</div>
-  </section>
+    <div class="connection" id="connection" data-state="connecting">
+      <span class="pulse" aria-hidden="true"></span>
+      <span class="connection-text">connecting</span>
+    </div>
+  </header>
 
-  <section class="panel wide" id="log-panel">
-    <h2>Activity <button id="clear" class="small">clear</button></h2>
-    <ol id="log" class="log"></ol>
-  </section>
-</main>
+  <main>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Build</h2>
+        <span class="rule" aria-hidden="true"></span>
+      </div>
+      <div class="buttons">
+        <button data-command="doctor">
+          <span class="btn-label">Doctor</span>
+          <span class="btn-hint">check the project</span>
+        </button>
+        <button data-command="build" class="primary">
+          <span class="btn-label">Build</span>
+          <span class="btn-hint">debug extension</span>
+        </button>
+        <button data-command="build" data-args='{"force":true}'>
+          <span class="btn-label">Rebuild</span>
+          <span class="btn-hint">ignore up-to-date</span>
+        </button>
+        <button data-command="build" data-args='{"release":true}'>
+          <span class="btn-label">Release</span>
+          <span class="btn-hint">optimised</span>
+        </button>
+      </div>
 
-<footer>
-  <span>Godot is the workhorse. Studio only decides what to run, when, and whether it worked.</span>
-  <button id="shutdown" class="small">Shut down Studio</button>
-</footer>
+      <div class="panel-head spaced">
+        <h2>Launch</h2>
+        <span class="rule" aria-hidden="true"></span>
+      </div>
+      <div class="buttons">
+        <button data-command="start-editor">
+          <span class="btn-label">Editor</span>
+          <span class="btn-hint">Godot, supervised</span>
+        </button>
+        <button data-command="start-game">
+          <span class="btn-label">Game</span>
+          <span class="btn-hint">run the project</span>
+        </button>
+        <button data-command="stop" class="danger">
+          <span class="btn-label">Stop</span>
+          <span class="btn-hint">only what Studio launched</span>
+        </button>
+      </div>
+
+      <div class="status-line" id="busy" data-active="false">
+        <span class="spinner" aria-hidden="true"></span>
+        <span class="status-text"></span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Health</h2>
+        <span class="rule" aria-hidden="true"></span>
+      </div>
+      <div id="health" class="health empty">
+        <div class="health-idle">
+          <span class="idle-mark" aria-hidden="true"></span>
+          <p>No diagnosis yet.</p>
+          <span class="idle-hint">Run Doctor to check the toolchain, the project, and the installed extension.</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel wide">
+      <div class="panel-head">
+        <h2>Activity</h2>
+        <span class="rule" aria-hidden="true"></span>
+        <button id="clear" class="ghost">Clear</button>
+      </div>
+      <ol id="log" class="log">
+        <li class="log-empty">Nothing has happened yet.</li>
+      </ol>
+    </section>
+  </main>
+
+  <footer>
+    <span class="foot-note">Godot is the workhorse. Studio decides what to run, when, and whether it worked.</span>
+    <span class="foot-local">Loopback only &middot; token required</span>
+    <button id="shutdown" class="ghost">Shut down</button>
+  </footer>
+</div>
 
 <script src="/app.js"></script>
 </body>

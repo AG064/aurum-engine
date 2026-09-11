@@ -94,4 +94,59 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn the_stylesheet_styles_every_log_severity_the_script_sets() {
+        // Same failure mode as the verdict: a severity the script applies and
+        // the stylesheet never defines is silently unstyled, which looks like
+        // a design decision rather than a bug.
+        for kind in ["good", "bad", "note"] {
+            assert!(
+                APP_JS.contains(&format!("'{kind}'")),
+                "the script should use the '{kind}' severity"
+            );
+            assert!(
+                STYLE_CSS.contains(&format!(".log .{kind}")),
+                "the stylesheet should define '.log .{kind}'"
+            );
+        }
+    }
+
+    #[test]
+    fn every_button_asks_for_a_command_the_server_accepts() {
+        // A button naming a command the server does not know is a dead control
+        // that only fails when somebody presses it.
+        const ACCEPTED: [&str; 5] = ["doctor", "build", "start-editor", "start-game", "stop"];
+
+        let mut seen = 0;
+        for piece in INDEX_HTML.split("data-command=\"").skip(1) {
+            let command = piece.split('"').next().unwrap_or_default();
+            assert!(
+                ACCEPTED.contains(&command),
+                "the page asks for '{command}', which the server does not accept"
+            );
+            seen += 1;
+        }
+        assert!(
+            seen >= 6,
+            "the page should offer the whole command set, found {seen}"
+        );
+    }
+
+    #[test]
+    fn the_mark_is_inline_rather_than_a_fetched_image() {
+        // Inline SVG keeps the page self-contained. An `<img>` would be a
+        // request, and an SVG written with an xmlns would put an external
+        // reference in the source even when nothing is fetched.
+        assert!(INDEX_HTML.contains("<svg"), "the mark should be inline SVG");
+        assert!(
+            !INDEX_HTML.contains("<img"),
+            "the page should not fetch an image"
+        );
+        assert!(
+            !INDEX_HTML.contains("xmlns="),
+            "inline SVG needs no namespace declaration in HTML5, and adding \
+             one puts an external-looking reference in the page"
+        );
+    }
 }
