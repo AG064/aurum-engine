@@ -11,6 +11,7 @@
 
 use std::collections::VecDeque;
 
+use aurum_content::Document;
 use aurum_core::dynamic::{DynamicWorld, DynamicWorldError};
 use aurum_core::prelude::{FixedTimestep, State, StateValue, TimeScale};
 use aurum_space::SpaceSimulation;
@@ -77,6 +78,10 @@ pub struct Engine {
     modules: Vec<String>,
     space: SpaceSimulation,
     story: Option<Interpreter>,
+    /// Authored content. Kept out of save/load and `reset`: it is source
+    /// material produced by authoring tools, not runtime session state, and
+    /// losing it to a runtime reset would be a nasty surprise.
+    content: Document,
 }
 
 impl Default for Engine {
@@ -97,7 +102,24 @@ impl Engine {
             modules: Vec::new(),
             space: SpaceSimulation::default(),
             story: None,
+            content: Document::new("aurum"),
         }
+    }
+
+    // ----- content authoring -----
+
+    /// The authored content document.
+    pub fn content(&self) -> &Document {
+        &self.content
+    }
+
+    pub fn content_mut(&mut self) -> &mut Document {
+        &mut self.content
+    }
+
+    /// Discard all authored content and start a fresh document.
+    pub fn reset_content(&mut self, name: &str) {
+        self.content = Document::new(name);
     }
 
     // ----- accessors -----

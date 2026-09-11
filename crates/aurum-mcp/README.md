@@ -59,9 +59,12 @@ Point it at the absolute path to `aurum.exe` if it is not on your `PATH`.
 
 ## Tools
 
-31 tools, all prefixed `aurum_`: 12 read-only and 19 mutating. Every read-only
-tool carries the `readOnlyHint` annotation, so a client can filter without a
-second code path.
+45 tools, all prefixed `aurum_`. Every read-only tool carries the
+`readOnlyHint` annotation, so a client can filter without a second code path.
+
+They split into a **runtime** group (31 tools: entities, components, events,
+state, time, space, story, save/load) and a **content authoring** group (14
+tools: meshes, materials, nodes, animations, sprites, glTF export).
 
 | Read-only | Mutating |
 |---|---|
@@ -91,6 +94,41 @@ the space snapshot, and the story cursor — in one call. That is deliberate: an
 agent grounded in one round trip does not need an N+1 exploration loop. Entity
 payloads are bounded by `entity_limit` (default 200) and report
 `entities_truncated`.
+
+### Content authoring
+
+The `aurum_content_*`, `aurum_mesh_*`, `aurum_node_*`, `aurum_material_*`,
+`aurum_animation_*`, and `aurum_sprite_*` tools build scenes in Rust and write
+**glTF 2.0**, which Godot imports natively. No Godot process and no Blender
+install are needed.
+
+A typical build:
+
+```
+aurum_mesh_add        kind=box, sphere, cylinder, cone, torus, plane
+aurum_material_add    colour, metallic, roughness, emissive
+aurum_node_add        parent, mesh, material, transform
+aurum_animation_spin  spin a node about an axis
+aurum_animation_add   arbitrary keyframes on translation/rotation/scale
+aurum_content_export  writes <name>.gltf + <name>.bin
+```
+
+Two conventions matter when scripting this:
+
+- **Indices are stable.** `aurum_node_remove` detaches a node from the graph
+  but keeps its slot, so animation targets stay valid. Call
+  `aurum_content_state` to see current indices.
+- **Content is not session state.** `aurum_reset` does not clear it and it is
+  not written into a save file — authored work is exported, not checkpointed.
+
+`aurum_sprite_atlas` packs named rectangles and returns the layout. Give each
+sprite a `color` and it also composes a placeholder PNG, which is enough to
+block out a UI before real art exists. The PNG encoder is written against
+DEFLATE stored blocks, so it needs no compression crate.
+
+Blender is optional by construction: it exports the same glTF that Aurum
+writes, so a mesh can come from either and still flow through the same
+pipeline.
 
 ### Story / visual novel
 

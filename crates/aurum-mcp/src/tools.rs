@@ -43,7 +43,7 @@ impl std::fmt::Display for ToolError {
 
 impl std::error::Error for ToolError {}
 
-type ToolResult = Result<Value, ToolError>;
+pub(crate) type ToolResult = Result<Value, ToolError>;
 
 /// Everything a handler may touch.
 pub struct ToolContext<'a> {
@@ -69,10 +69,10 @@ pub struct Tool {
 // ---------------------------------------------------------------------------
 
 /// A thin, strict reader over a tool call's arguments object.
-struct Args<'a>(&'a Value);
+pub(crate) struct Args<'a>(pub(crate) &'a Value);
 
 impl<'a> Args<'a> {
-    fn new(params: &'a Value) -> Result<Self, ToolError> {
+    pub(crate) fn new(params: &'a Value) -> Result<Self, ToolError> {
         match params {
             Value::Null => Ok(Self(&Value::Null)),
             Value::Object(_) => Ok(Self(params)),
@@ -83,7 +83,7 @@ impl<'a> Args<'a> {
         }
     }
 
-    fn get(&self, key: &str) -> Option<&'a Value> {
+    pub(crate) fn get(&self, key: &str) -> Option<&'a Value> {
         match self.0 {
             Value::Object(map) => map.get(key).filter(|v| !v.is_null()),
             _ => None,
@@ -91,7 +91,7 @@ impl<'a> Args<'a> {
     }
 
     /// A required string.
-    fn str(&self, key: &str) -> Result<&'a str, ToolError> {
+    pub(crate) fn str(&self, key: &str) -> Result<&'a str, ToolError> {
         match self.get(key) {
             Some(Value::String(s)) => Ok(s.as_str()),
             Some(other) => Err(ToolError::Invalid(format!(
@@ -105,7 +105,7 @@ impl<'a> Args<'a> {
     }
 
     /// A required integer.
-    fn i64(&self, key: &str) -> Result<i64, ToolError> {
+    pub(crate) fn i64(&self, key: &str) -> Result<i64, ToolError> {
         match self.get(key) {
             Some(Value::Number(n)) => n
                 .as_i64()
@@ -120,7 +120,7 @@ impl<'a> Args<'a> {
         }
     }
 
-    fn f64(&self, key: &str) -> Result<f64, ToolError> {
+    pub(crate) fn f64(&self, key: &str) -> Result<f64, ToolError> {
         match self.get(key) {
             Some(Value::Number(n)) => n
                 .as_f64()
@@ -135,7 +135,7 @@ impl<'a> Args<'a> {
         }
     }
 
-    fn bool_or(&self, key: &str, default: bool) -> Result<bool, ToolError> {
+    pub(crate) fn bool_or(&self, key: &str, default: bool) -> Result<bool, ToolError> {
         match self.get(key) {
             Some(Value::Bool(b)) => Ok(*b),
             Some(other) => Err(ToolError::Invalid(format!(
@@ -146,7 +146,7 @@ impl<'a> Args<'a> {
         }
     }
 
-    fn usize_or(&self, key: &str, default: usize) -> Result<usize, ToolError> {
+    pub(crate) fn usize_or(&self, key: &str, default: usize) -> Result<usize, ToolError> {
         match self.get(key) {
             Some(Value::Number(n)) => n.as_u64().map(|v| v as usize).ok_or_else(|| {
                 ToolError::Invalid(format!("'{key}' must be a non-negative integer"))
@@ -160,13 +160,13 @@ impl<'a> Args<'a> {
     }
 
     /// Required raw JSON.
-    fn value(&self, key: &str) -> Result<&'a Value, ToolError> {
+    pub(crate) fn value(&self, key: &str) -> Result<&'a Value, ToolError> {
         self.get(key)
             .ok_or_else(|| ToolError::Invalid(format!("missing required argument '{key}'")))
     }
 
     /// An optional array of strings.
-    fn string_array(&self, key: &str) -> Result<Vec<String>, ToolError> {
+    pub(crate) fn string_array(&self, key: &str) -> Result<Vec<String>, ToolError> {
         match self.get(key) {
             None => Ok(Vec::new()),
             Some(Value::Array(items)) => items
@@ -185,7 +185,7 @@ impl<'a> Args<'a> {
     }
 }
 
-fn kind_of(v: &Value) -> &'static str {
+pub(crate) fn kind_of(v: &Value) -> &'static str {
     match v {
         Value::Null => "null",
         Value::Bool(_) => "a boolean",
@@ -226,8 +226,14 @@ pub struct PathGuard {
 impl PathGuard {
     /// Create a guard rooted at `root`. A relative root is resolved against
     /// the current directory.
+    ///
+    /// The root is absolutized up front. Without that, a root of `"."` breaks
+    /// the containment check below: normalizing `./save.json` yields
+    /// `save.json`, which no longer starts with the literal `"."`, so every
+    /// path would be denied.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
+        let root = std::path::absolute(&root).unwrap_or(root);
         let canonical_root = root.canonicalize().ok();
         Self {
             root,
@@ -350,7 +356,7 @@ fn state_value_to_json(value: &StateValue) -> Value {
     }
 }
 
-fn ok(value: Value) -> ToolResult {
+pub(crate) fn ok(value: Value) -> ToolResult {
     Ok(value)
 }
 
@@ -803,7 +809,7 @@ fn tool_story_import_state(ctx: &mut ToolContext<'_>, params: &Value) -> ToolRes
 // Catalog
 // ---------------------------------------------------------------------------
 
-fn schema(properties: Value, required: Value) -> Value {
+pub(crate) fn schema(properties: Value, required: Value) -> Value {
     json!({
         "type": "object",
         "properties": properties,
@@ -811,12 +817,13 @@ fn schema(properties: Value, required: Value) -> Value {
     })
 }
 
-/// Every tool this server exposes.
+/// Every tool this server exposes, including the content-authoring group.
 ///
-/// Order is presentation order in `tools/list`: reads first, then writes,
-/// which is also the order a cautious client should consider them in.
+/// Order is presentation order in `tools/list`: runtime reads first, then
+/// runtime writes, then content authoring, which is also the order a cautious
+/// client should consider them in.
 pub fn catalog() -> Vec<Tool> {
-    vec![
+    let mut tools = vec![
         Tool {
             name: "aurum_world_snapshot",
             description: "Return the whole engine session in one call: entity ids and their \
@@ -1159,7 +1166,9 @@ pub fn catalog() -> Vec<Tool> {
             read_only: false,
             handler: tool_story_import_state,
         },
-    ]
+    ];
+    tools.extend(crate::content_tools::catalog());
+    tools
 }
 
 /// Find a tool by name.
@@ -1554,6 +1563,21 @@ mod tests {
         )
         .is_err());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_relative_root_still_admits_its_own_children() {
+        // Regression: with a literal "." root, normalizing "./save.json"
+        // yields "save.json", which does not start with "." -- so every path
+        // was denied. `aurum mcp --root .` would have refused all file work.
+        let paths = PathGuard::new(".");
+        assert!(paths.root().is_absolute(), "the root must be absolutized");
+        assert!(paths.resolve("save.json").is_ok());
+        assert!(paths.resolve("nested/deep.json").is_ok());
+        assert!(matches!(
+            paths.resolve("../escape.json"),
+            Err(ToolError::Denied(_))
+        ));
     }
 
     #[test]

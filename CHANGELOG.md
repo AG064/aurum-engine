@@ -38,6 +38,35 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - **`aurum-cli`** — the `aurum` binary, with `aurum mcp` delegating to
   `aurum-mcp` so the two entry points cannot drift.
 
+- **`aurum-content`** — Rust-first content authoring: procedural meshes,
+  scene graphs, animations, sprite atlases, and a glTF 2.0 exporter. Adds no
+  external dependencies; glTF is JSON plus one binary buffer, and the PNG
+  encoder uses DEFLATE stored blocks rather than a compression crate.
+  - Primitives: box, plane, UV sphere, cylinder, cone, torus.
+  - Transforms with inverse-transpose normal handling and winding flips under
+    mirroring; merge for compound shapes.
+  - Materials in the metallic-roughness model.
+  - Animations with linear/step interpolation and unit-quaternion normalization.
+  - Sprite atlas packing plus a dependency-free PNG encoder.
+  - 76 tests, including winding assertions that catch inside-out meshes.
+
+- **`aurum-mcp` content tools** — 14 new tools (45 total) so an agent can
+  build meshes, materials, hierarchies, animations, and sprite atlases, then
+  export glTF, all without Godot or Blender running.
+
+- **`scripts/tests/gltf_import.ps1`** — end-to-end gate: generate a scene in
+  Rust, import it into Godot 4.7, and assert the meshes, node names, and
+  animations survive.
+
+### Fixed
+
+- `PathGuard` denied every path when the root was relative, so
+  `aurum mcp --root .` refused all file operations. The root is now
+  absolutized before the containment check.
+
+- Sphere, cylinder, cone-side, and both cylinder caps were wound inside-out.
+  Caught by tests that assert face normals point away from the origin.
+
 ### Documentation
 
 - `docs/superpowers/specs/2026-09-11-aurum-mcp-design.md` — the three-layer MCP

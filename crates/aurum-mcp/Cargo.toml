@@ -14,6 +14,7 @@ name = "aurum-mcp"
 path = "src/main.rs"
 
 [dependencies]
+aurum-content = { path = "../aurum-content" }
 aurum-core = { path = "../aurum-core" }
 aurum-space = { path = "../aurum-space" }
 aurum-vn = { path = "../aurum-vn" }

@@ -34,6 +34,7 @@
 //! - [`cli`] — argument parsing and the process entry point
 
 pub mod cli;
+pub mod content_tools;
 pub mod engine;
 pub mod protocol;
 pub mod server;
