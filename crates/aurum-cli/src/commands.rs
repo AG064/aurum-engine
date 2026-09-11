@@ -857,6 +857,159 @@ pub fn modules(args: &[String]) -> ExitCode {
     }
 }
 
+/// `aurum godot [project] [--fetch <url> --sha256 <digest>]`
+///
+/// With no arguments, what Godot builds this machine already has, which is the
+/// case that should keep working first: most people have one, and telling them
+/// to fetch a second copy would be rude.
+///
+/// With `--fetch`, a verified download. **The digest is required and is not
+/// defaulted.** A built-in table of hashes would be this command asserting a
+/// fact about a file it has never seen, and a table that is wrong is worse than
+/// no table: it turns a check into a formality. The caller supplies what they
+/// expect, and the bytes are held to it.
+pub fn godot(args: &[String]) -> ExitCode {
+    let mut url: Option<String> = None;
+    let mut digest: Option<String> = None;
+    let mut into: Option<PathBuf> = None;
+    let mut json = false;
+    let mut path: Option<PathBuf> = None;
+
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index].as_str();
+        let mut take = |what: &str| -> Option<String> {
+            index += 1;
+            match args.get(index) {
+                Some(value) => Some(value.clone()),
+                None => {
+                    eprintln!("aurum godot: {argument} requires {what}");
+                    None
+                }
+            }
+        };
+        match argument {
+            "--json" => json = true,
+            "--fetch" => match take("a url") {
+                Some(v) => url = Some(v),
+                None => return ExitCode::from(exit::USAGE),
+            },
+            "--sha256" => match take("a digest") {
+                Some(v) => digest = Some(v),
+                None => return ExitCode::from(exit::USAGE),
+            },
+            "--into" => match take("a directory") {
+                Some(v) => into = Some(PathBuf::from(v)),
+                None => return ExitCode::from(exit::USAGE),
+            },
+            "-h" | "--help" => return usage("godot", "help"),
+            other if other.starts_with('-') => {
+                eprintln!("aurum godot: unknown option '{other}'");
+                return ExitCode::from(exit::USAGE);
+            }
+            other => path = Some(PathBuf::from(other)),
+        }
+        index += 1;
+    }
+
+    let (Some(url), Some(digest)) = (url, digest) else {
+        return list_godot(path.as_deref(), json);
+    };
+
+    let into = into.unwrap_or_else(|| {
+        aurum_studio_core::registry::Registry::resolve_path()
+            .and_then(|registry| registry.parent().map(|home| home.join("godot")))
+            .unwrap_or_else(|| PathBuf::from("godot"))
+    });
+
+    let available = aurum_studio_core::downloads::Availability {
+        version: String::new(),
+        platform: std::env::consts::OS.to_string(),
+        url,
+        sha256: digest,
+    };
+
+    match aurum_studio_core::downloads::install(
+        &available,
+        &into,
+        &aurum_studio_core::downloads::SystemFetcher,
+    ) {
+        Ok(installed) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "installed": installed.display().to_string(),
+                        "verified": true,
+                    })
+                );
+            } else {
+                println!("installed {} (digest verified)", installed.display());
+            }
+            ExitCode::from(exit::OK)
+        }
+        Err(aurum_studio_core::downloads::DownloadError::AlreadyInstalled(path)) => {
+            if !json {
+                println!("already installed and verified: {}", path.display());
+            }
+            ExitCode::from(exit::OK)
+        }
+        Err(error) => {
+            eprintln!("aurum godot: {error}");
+            ExitCode::from(exit::FAILED)
+        }
+    }
+}
+
+/// What this machine already has.
+fn list_godot(path: Option<&Path>, json: bool) -> ExitCode {
+    let root = path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    // A project names the Godot it wants; without one there is still a PATH to
+    // look at, which is what most machines actually rely on.
+    let found = match Project::open(&root) {
+        Ok(project) => {
+            let toolchain = discover(&project, None);
+            toolchain.godot
+        }
+        Err(_) => None,
+    };
+
+    // The windowed build is what gets launched; report the one that will be.
+    let launchable = Project::open(&root)
+        .ok()
+        .and_then(|project| discover_godot_to_launch(&project, None));
+
+    match (&found, &launchable) {
+        (_, Some(binary)) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "godot": binary.display().to_string(),
+                        "version": found.as_ref().and_then(|t| t.version.clone()),
+                    })
+                );
+            } else {
+                println!("godot: {}", binary.display());
+                if let Some(version) = found.as_ref().and_then(|t| t.version.as_deref()) {
+                    println!("  version: {version}");
+                }
+            }
+            ExitCode::from(exit::OK)
+        }
+        _ => {
+            eprintln!(
+                "aurum godot: no Godot was found on PATH or beside the project; \
+                 fetch one with `aurum godot --fetch <url> --sha256 <digest>`"
+            );
+            ExitCode::from(exit::WARNING)
+        }
+    }
+}
+
 /// `aurum stop [project]`
 ///
 /// Stops only processes this project's most recent session launched, and only

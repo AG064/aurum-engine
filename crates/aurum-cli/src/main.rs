@@ -29,6 +29,9 @@ COMMANDS:
                           into a directory that already has anything in it.
     modules [project]     What the engine ships, what this project turned
                           on, and anything named that does not exist.
+    godot [project]       What Godot this machine has, or fetch one with
+                          --fetch <url> --sha256 <digest>. Refuses to install
+                          a download whose digest does not match.
     stop [project]        Stop the processes this project's session launched.
     restart [project]     Restart the editor, for a native structural change
                           that cannot be migrated live. Asks politely; refuses
@@ -66,6 +69,7 @@ fn main() -> ExitCode {
         Some("run") => commands::run(&args[1..]),
         Some("stop") => commands::stop(&args[1..]),
         Some("modules") => commands::modules(&args[1..]),
+        Some("godot") => commands::godot(&args[1..]),
         Some("restart") => commands::restart(&args[1..]),
         Some("new") => commands::new(&args[1..]),
         Some("studio") => commands::studio(&args[1..]),
