@@ -11,15 +11,20 @@ godot_version = "4.7"
 rust_package = "aurum-godot"
 addon_destination = "godot/addons/aurum"
 
+# The engine modules this project uses.
+#
+# Only feature modules belong here. `aurum-core` is the foundation every
+# module is built on rather than something to opt into, and `aurum-mcp` and
+# `aurum-editor` are tooling that drives a project rather than parts of one;
+# naming any of them here would be configuration that reads as meaningful and
+# is not. `aurum modules` reports anything in this list the engine does not
+# ship, which is how the three of them were found.
 modules = [
-    "aurum-core",
     "aurum-2d",
     "aurum-3d",
     "aurum-space",
     "aurum-vn",
     "aurum-content",
-    "aurum-mcp",
-    "aurum-editor",
 ]
 
 [engine]

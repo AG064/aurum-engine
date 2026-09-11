@@ -766,6 +766,97 @@ pub fn new(args: &[String]) -> ExitCode {
     }
 }
 
+/// `aurum modules [project]`
+///
+/// What the engine ships, what this project turned on, and anything named that
+/// does not exist. The last of those is the reason it exists: a typo in
+/// `aurum.toml` used to be accepted in silence and behave as though the module
+/// were on.
+pub fn modules(args: &[String]) -> ExitCode {
+    let options = match parse(args) {
+        Ok(options) => options,
+        Err(message) => return usage("modules", &message),
+    };
+
+    let path = target(&options);
+    let project = match Project::open(&path) {
+        Ok(project) => project,
+        Err(error) => {
+            eprintln!("aurum modules: {error}");
+            return ExitCode::from(exit::FAILED);
+        }
+    };
+
+    let engine = project
+        .config
+        .engine_path_hint
+        .as_deref()
+        .map(PathBuf::from);
+    let report = aurum_studio_core::modules::report(&project.config.modules, engine.as_deref());
+
+    if options.json {
+        let entries: Vec<serde_json::Value> = report
+            .entries
+            .iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "name": entry.name,
+                    "description": entry.description,
+                    "state": entry.state.label(),
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({
+                "project": project.config.name,
+                "checkout_read": report.checkout_read,
+                "enabled": report.with_state(aurum_studio_core::modules::State::Enabled).len(),
+                "unknown": report.unknown(),
+                "modules": entries,
+            })
+        );
+    } else {
+        // Enabled first, then anything wrong, then the rest: what is on is the
+        // answer to the question that was asked, and a problem outranks a
+        // suggestion.
+        let order = [
+            aurum_studio_core::modules::State::Enabled,
+            aurum_studio_core::modules::State::Missing,
+            aurum_studio_core::modules::State::Unknown,
+            aurum_studio_core::modules::State::Available,
+        ];
+        println!("{} modules for {}", project.config.name, path.display());
+        for state in order {
+            for entry in report.with_state(state) {
+                let marker = match state {
+                    aurum_studio_core::modules::State::Enabled => "on ",
+                    aurum_studio_core::modules::State::Missing => "!! ",
+                    aurum_studio_core::modules::State::Unknown => "?? ",
+                    aurum_studio_core::modules::State::Available => "   ",
+                };
+                let hint = match report.suggestion(&entry.name) {
+                    Some(near) if state == aurum_studio_core::modules::State::Unknown => {
+                        format!(" (did you mean '{near}'?)")
+                    }
+                    _ => String::new(),
+                };
+                println!("  {marker}{:<12} {}{hint}", entry.name, entry.description);
+            }
+        }
+        if !report.checkout_read {
+            println!("  (the engine checkout was not readable, so nothing is reported missing)");
+        }
+    }
+
+    // Unknown names are the one outcome a script should branch on.
+    if report.unknown().is_empty() {
+        ExitCode::from(exit::OK)
+    } else {
+        ExitCode::from(exit::WARNING)
+    }
+}
+
 /// `aurum stop [project]`
 ///
 /// Stops only processes this project's most recent session launched, and only

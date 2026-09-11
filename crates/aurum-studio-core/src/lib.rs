@@ -44,6 +44,7 @@ pub mod build_queue;
 pub mod doctor;
 pub mod gameplay;
 pub mod hash;
+pub mod modules;
 pub mod ownership;
 pub mod process;
 pub mod project;

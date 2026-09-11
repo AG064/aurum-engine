@@ -356,6 +356,80 @@ pub fn diagnose(project: &Project, toolchain: &Toolchain, godot_hint: Option<&Pa
         ),
     }
 
+    // ----- modules --------------------------------------------------------
+
+    // Only reported when the project actually names modules. An empty list is
+    // the ordinary case and says nothing worth a line, and a report that fills
+    // with "you have configured nothing" is one people stop reading.
+    if !project.config.modules.is_empty() {
+        let engine = project
+            .config
+            .engine_path_hint
+            .as_deref()
+            .map(PathBuf::from);
+        let modules = crate::modules::report(&project.config.modules, engine.as_deref());
+
+        let unknown = modules.unknown();
+        if !unknown.is_empty() {
+            // A name the engine does not ship used to be accepted in silence
+            // and behave as though the module were on, which is the worst of
+            // both: configuration that looks live and does nothing.
+            let described = unknown
+                .iter()
+                .map(|name| match modules.suggestion(name) {
+                    Some(near) => format!("'{name}' (did you mean '{near}'?)"),
+                    None => format!("'{name}'"),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            findings.push(
+                Finding::warning(
+                    "modules",
+                    format!(
+                        "{} named module(s) are not part of this engine",
+                        unknown.len()
+                    ),
+                )
+                .with_evidence(described)
+                .with_remedy(
+                    "run `aurum modules` to see what the engine ships, then correct aurum.toml",
+                ),
+            );
+        } else {
+            let missing = modules.with_state(crate::modules::State::Missing);
+            if missing.is_empty() {
+                findings.push(
+                    Finding::ok(
+                        "modules",
+                        format!(
+                            "{} configured module(s) are present",
+                            project.config.modules.len()
+                        ),
+                    )
+                    .with_evidence(project.config.modules.join(", ")),
+                );
+            } else {
+                let names = missing
+                    .iter()
+                    .map(|entry| entry.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                findings.push(
+                    Finding::warning(
+                        "modules",
+                        format!(
+                            "{} configured module(s) have no crate in the engine",
+                            missing.len()
+                        ),
+                    )
+                    .with_evidence(names)
+                    .with_remedy("check that [engine] path_hint in aurum.toml names the checkout"),
+                );
+            }
+        }
+    }
+
     // ----- toolchain ------------------------------------------------------
 
     match &toolchain.cargo {

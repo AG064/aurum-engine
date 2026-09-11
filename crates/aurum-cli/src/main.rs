@@ -27,6 +27,8 @@ COMMANDS:
     run [project]         Launch the project's game, supervised.
     new <path>            Make a project from a template. Refuses to write
                           into a directory that already has anything in it.
+    modules [project]     What the engine ships, what this project turned
+                          on, and anything named that does not exist.
     stop [project]        Stop the processes this project's session launched.
     restart [project]     Restart the editor, for a native structural change
                           that cannot be migrated live. Asks politely; refuses
@@ -63,6 +65,7 @@ fn main() -> ExitCode {
         Some("editor") => commands::editor(&args[1..]),
         Some("run") => commands::run(&args[1..]),
         Some("stop") => commands::stop(&args[1..]),
+        Some("modules") => commands::modules(&args[1..]),
         Some("restart") => commands::restart(&args[1..]),
         Some("new") => commands::new(&args[1..]),
         Some("studio") => commands::studio(&args[1..]),
