@@ -142,7 +142,31 @@ pwsh scripts/dev.ps1
 
 # The Studio shell: a local page that drives the same supervisor
 aurum studio
+
+# The live evidence: change Rust, rebuild, and prove the running editor
+# picked it up without restarting
+pwsh scripts/tests/studio_hot_reload.ps1
 ```
+
+## Proving a reload actually happened
+
+`doctor` reports whether the editor bridge plugin is installed **and enabled**,
+and those are different questions. The plugin is what publishes the fingerprint
+the loaded extension reports; without it Studio can install a new library but
+cannot learn whether the editor picked it up or merely wrote a file.
+
+That distinction is the whole argument of
+`scripts/tests/studio_hot_reload.ps1`. The build publishes a reload marker
+holding a DLL hash, which proves a file was written. The plugin publishes the
+live fingerprint, which proves the new code is the code running. The test
+rebuilds several times and reads each new value out of an editor that was
+started once and never restarted.
+
+It needs nothing installed: no node, no npm, no MCP client. An earlier version
+of this check drove the observation through an npm MCP Inspector and a
+third-party Godot toolkit, and left orphaned processes behind when its own
+cleanup reported success. A verification path that leaks processes, in service
+of a tool whose argument is that dependencies are risk, was the wrong shape.
 
 ## The Studio shell
 
