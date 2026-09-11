@@ -11,8 +11,6 @@
 
 #![allow(dead_code)]
 
-use aurum_core::prelude::*;
-
 /// Tag component marking an entity as an XR rig.
 #[derive(Debug)]
 pub struct XrRig;

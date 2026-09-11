@@ -75,6 +75,10 @@ unsafe impl ExtensionLibrary for AurumExtension {
 pub struct AurumNode {
     base: Base<Node>,
     /// Typed Rust ECS (for Rust-side systems; optional for GDScript).
+    ///
+    /// Held for the node's whole lifetime so Rust-side systems have a world to
+    /// query once they are registered; no in-crate reader exists yet.
+    #[allow(dead_code)]
     pub(crate) world: World,
     /// Dynamic JSON-blob component store: entity -> {type_name -> value}.
     pub(crate) components: HashMap<i64, HashMap<String, serde_json::Value>>,
@@ -250,7 +254,7 @@ impl AurumNode {
             None => return Array::<i64>::new(),
         };
         let mut acc: Option<HashSet<i64>> = self.by_type.get(&first.to_string()).cloned();
-        while let Some(next) = iter.next() {
+        for next in iter {
             let set = self.by_type.get(&next.to_string()).cloned();
             acc = match (acc, set) {
                 (Some(a), Some(b)) => Some(a.intersection(&b).copied().collect()),
@@ -359,6 +363,10 @@ impl AurumNode {
     // ===== Space simulation =====
 
     /// Configure the reusable Aurum 6DOF flight model for the active ship.
+    ///
+    /// The parameter list is the GDScript-facing API; it mirrors `FlightConfig`
+    /// field by field and must not be restructured.
+    #[allow(clippy::too_many_arguments)]
     #[func]
     fn space_configure(
         &mut self,
@@ -393,7 +401,6 @@ impl AurumNode {
             hull_capacity,
             flight_assist_damping,
             dampen_strength: (flight_assist_damping * 6.0).max(4.0),
-            ..FlightConfig::default()
         });
         true
     }
@@ -413,6 +420,10 @@ impl AurumNode {
 
     /// Place the authoritative ship transform from a presentation or load
     /// boundary. Normal flight then owns subsequent transform changes.
+    ///
+    /// The parameter list is the GDScript-facing API: seven loose floats,
+    /// because GDScript has no value type for a position/quaternion pair.
+    #[allow(clippy::too_many_arguments)]
     #[func]
     fn space_set_transform(
         &mut self,
@@ -455,6 +466,10 @@ impl AurumNode {
 
     /// Submit normalized control input. The values are consumed by the next
     /// fixed simulation ticks.
+    ///
+    /// The parameter list is the GDScript-facing API; it mirrors `FlightInput`
+    /// field by field and must not be restructured.
+    #[allow(clippy::too_many_arguments)]
     #[func]
     fn space_set_input(
         &mut self,
@@ -692,7 +707,7 @@ impl AurumNode {
                     d.set("text", c.text);
                     d.set("goto", c.goto);
                     d.set("text_key", c.text_key);
-                    let _ = arr.push(&d.to_variant());
+                    arr.push(&d.to_variant());
                 }
                 let pairs: Vec<(&str, Variant)> = vec![
                     ("type", "choice".to_variant()),

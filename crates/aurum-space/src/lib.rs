@@ -238,11 +238,13 @@ impl UniversePosition {
     pub fn translate(&mut self, delta: Vec3) -> SectorCoord {
         self.local += delta;
         let half = SECTOR_SIZE_M * 0.5;
-        let mut moved = SectorCoord::default();
-        moved.x = normalize_axis(&mut self.local.x, &mut self.sector.x, half);
-        moved.y = normalize_axis(&mut self.local.y, &mut self.sector.y, half);
-        moved.z = normalize_axis(&mut self.local.z, &mut self.sector.z, half);
-        moved
+        // Field initializers run in written order, matching the per-axis
+        // normalization this replaced; each axis is independent.
+        SectorCoord {
+            x: normalize_axis(&mut self.local.x, &mut self.sector.x, half),
+            y: normalize_axis(&mut self.local.y, &mut self.sector.y, half),
+            z: normalize_axis(&mut self.local.z, &mut self.sector.z, half),
+        }
     }
 }
 
@@ -553,16 +555,9 @@ impl SpaceSimulation {
 
 /// Small adapter that lets a host feed real frame deltas into a fixed space
 /// simulation without putting frame-rate dependence into flight code.
+#[derive(Default)]
 pub struct SpaceClock {
     fixed: FixedTimestep,
-}
-
-impl Default for SpaceClock {
-    fn default() -> Self {
-        Self {
-            fixed: FixedTimestep::default(),
-        }
-    }
 }
 
 impl SpaceClock {

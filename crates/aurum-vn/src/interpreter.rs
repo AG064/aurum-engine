@@ -479,7 +479,7 @@ fn numbers(
     let l = vars
         .get(&op.variable)
         .and_then(value_as_f64)
-        .ok_or_else(|| StoryError::InvalidVarValue)?;
+        .ok_or(StoryError::InvalidVarValue)?;
     let r = value_as_f64(&op.value).ok_or(StoryError::InvalidVarValue)?;
     Ok((l, r))
 }
