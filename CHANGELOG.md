@@ -58,6 +58,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
   Rust, import it into Godot 4.7, and assert the meshes, node names, and
   animations survive.
 
+- **glTF 2.0 import** (`aurum-content`) — reads `.gltf` and `.glb` back into
+  the Aurum content model, so a Blender-authored asset can be inspected,
+  transformed, merged, and re-exported. Handles GLB chunks, base64 data URIs,
+  relative buffer paths, interleaved `byteStride` data, normalized integer
+  attributes, every index component type, multi-primitive meshes (split into
+  child nodes so materials survive), and `matrix` node transforms. Refuses
+  Draco and meshopt with an actionable message. 19 new tests.
+
+- **`aurum_content_import`** — the MCP tool for the above, with `append`
+  (default, remaps indices) and `replace` modes. Verified end to end against a
+  real Blender export: 96 meshes, 66,105 triangles, and 2 skeletal animations
+  round-tripped through MCP into Godot with an identical triangle count.
+
+- **`cargo run -p aurum-content --example inspect_gltf -- <file>`** — summarise
+  any glTF or GLB.
+
 ### Fixed
 
 - `PathGuard` denied every path when the root was relative, so

@@ -104,8 +104,21 @@ Do **not** use it for:
 - Animation of transforms — that is `aurum_animation_*`.
 
 A mesh from Blender and a mesh from Aurum meet at the same place, so mixing
-them costs nothing. Nothing in the build requires Blender to be installed, and
-a fresh machine with only Rust and Godot can produce a complete, textured,
+them costs nothing:
+
+```
+Blender  --export .glb-->  aurum_content_import  -->  transform / merge
+                                                          |
+                                          aurum_content_export
+                                                          |
+                                                          v
+                                              Godot imports the result
+```
+
+`aurum_content_import` reads Blender's default `.glb` output directly, so an
+imported asset can be placed, merged with procedural geometry, and re-exported
+in one session. Nothing in the build requires Blender to be installed, and a
+fresh machine with only Rust and Godot can produce a complete, textured,
 animated scene.
 
 ## Commands

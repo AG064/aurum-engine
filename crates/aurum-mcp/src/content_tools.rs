@@ -687,6 +687,44 @@ fn tool_content_export(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult 
     }))
 }
 
+/// Load a glTF or GLB file into the content document.
+///
+/// This is the Blender path: Blender exports glTF or GLB natively, and this
+/// reads it back into the same model the procedural tools build, so an
+/// imported asset can be inspected, transformed, merged, and re-exported.
+fn tool_content_import(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult {
+    let args = Args::new(params)?;
+    let path = ctx.paths.resolve(args.str("path")?)?;
+    let mode = args.get("mode").and_then(Value::as_str).unwrap_or("append");
+    if mode != "append" && mode != "replace" {
+        return Err(ToolError::Invalid(format!(
+            "'mode' must be append or replace; got '{mode}'"
+        )));
+    }
+
+    let imported = aurum_content::gltf_import::import_path(&path)
+        .map_err(|e| ToolError::Invalid(e.to_string()))?;
+
+    let summary = json!({
+        "source": path.display().to_string(),
+        "mesh_count": imported.meshes.len(),
+        "material_count": imported.materials.len(),
+        "node_count": imported.scene.len(),
+        "animation_count": imported.animations.len(),
+        "total_triangles": imported.meshes.iter().map(|m| m.triangle_count()).sum::<usize>(),
+        "modal": mode,
+    });
+
+    match mode {
+        "replace" => *ctx.engine.content_mut() = imported,
+        _ => ctx.engine.content_mut().append(imported),
+    }
+
+    let mut out = summary;
+    out["document_mesh_count"] = json!(ctx.engine.content().meshes.len());
+    out["document_node_count"] = json!(ctx.engine.content().scene.len());
+    ok(out)
+}
 // ---------------------------------------------------------------------------
 // Catalog
 // ---------------------------------------------------------------------------
@@ -930,6 +968,24 @@ pub fn catalog() -> Vec<Tool> {
             ),
             read_only: false,
             handler: tool_content_export,
+        },
+        Tool {
+            name: "aurum_content_import",
+            description: "Load a glTF or GLB file into the content document. This is how a \
+                          Blender-authored asset enters Aurum: Blender exports glTF or GLB \
+                          natively, and everything read here can then be transformed, merged, \
+                          and re-exported by the other content tools. `mode: append` (the \
+                          default) merges it into what you already have and remaps indices; \
+                          `replace` discards the current document first.",
+            input_schema: schema(
+                json!({
+                    "path": { "type": "string", "description": "File inside the server root, .gltf or .glb." },
+                    "mode": { "type": "string", "enum": ["append", "replace"], "description": "Merge or replace (default append)." }
+                }),
+                json!(["path"]),
+            ),
+            read_only: false,
+            handler: tool_content_import,
         },
     ]
 }
@@ -1520,6 +1576,175 @@ mod tests {
         restored.load_save_json(&saved).unwrap();
         let state = call(&mut restored, &paths, "aurum_content_state", json!({})).unwrap();
         assert_eq!(state["mesh_count"], 0);
+    }
+
+    #[test]
+    fn import_appends_and_remaps_into_an_existing_document() {
+        let root = temp_root("import-append");
+        let paths = PathGuard::new(&root);
+        let mut engine = Engine::new();
+
+        // Build and export a small scene, then import it back alongside new work.
+        let mesh = call(
+            &mut engine,
+            &paths,
+            "aurum_mesh_add",
+            json!({"kind": "box"}),
+        )
+        .unwrap();
+        call(
+            &mut engine,
+            &paths,
+            "aurum_node_add",
+            json!({"name": "Original", "mesh": mesh["index"]}),
+        )
+        .unwrap();
+        call(
+            &mut engine,
+            &paths,
+            "aurum_animation_spin",
+            json!({"node": 0, "name": "Spin"}),
+        )
+        .unwrap();
+        call(
+            &mut engine,
+            &paths,
+            "aurum_content_export",
+            json!({"path": "asset.gltf"}),
+        )
+        .unwrap();
+
+        let imported = call(
+            &mut engine,
+            &paths,
+            "aurum_content_import",
+            json!({"path": "asset.gltf", "mode": "append"}),
+        )
+        .unwrap();
+
+        assert_eq!(imported["mesh_count"], 1);
+        assert_eq!(imported["node_count"], 1);
+        assert_eq!(imported["animation_count"], 1);
+        assert_eq!(
+            imported["document_mesh_count"], 2,
+            "append must keep the original"
+        );
+        assert_eq!(imported["document_node_count"], 2);
+
+        // Indices must be remapped, not reused: the document stays valid.
+        let valid = call(&mut engine, &paths, "aurum_content_validate", json!({})).unwrap();
+        assert_eq!(valid["valid"], true, "{valid}");
+
+        let state = call(&mut engine, &paths, "aurum_content_state", json!({})).unwrap();
+        let nodes = state["nodes"].as_array().unwrap();
+        let appended = nodes.iter().find(|n| n["index"] == 1).unwrap();
+        assert_eq!(appended["mesh"], 1, "the appended node kept mesh index 0");
+        assert_eq!(appended["is_root"], true);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn import_replace_discards_the_current_document() {
+        let root = temp_root("import-replace");
+        let paths = PathGuard::new(&root);
+        let mut engine = Engine::new();
+
+        let mesh = call(
+            &mut engine,
+            &paths,
+            "aurum_mesh_add",
+            json!({"kind": "sphere"}),
+        )
+        .unwrap();
+        call(
+            &mut engine,
+            &paths,
+            "aurum_node_add",
+            json!({"name": "Ball", "mesh": mesh["index"]}),
+        )
+        .unwrap();
+        call(
+            &mut engine,
+            &paths,
+            "aurum_content_export",
+            json!({"path": "only.gltf"}),
+        )
+        .unwrap();
+
+        // Add work that replace should throw away.
+        let extra = call(
+            &mut engine,
+            &paths,
+            "aurum_mesh_add",
+            json!({"kind": "box"}),
+        )
+        .unwrap();
+        call(
+            &mut engine,
+            &paths,
+            "aurum_node_add",
+            json!({"name": "Extra", "mesh": extra["index"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            call(&mut engine, &paths, "aurum_content_state", json!({})).unwrap()["mesh_count"],
+            2
+        );
+
+        let imported = call(
+            &mut engine,
+            &paths,
+            "aurum_content_import",
+            json!({"path": "only.gltf", "mode": "replace"}),
+        )
+        .unwrap();
+        assert_eq!(
+            imported["document_mesh_count"], 1,
+            "replace must discard the extra mesh"
+        );
+        assert_eq!(imported["modal"], "replace");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn import_reports_missing_files_and_bad_modes() {
+        let root = temp_root("import-errors");
+        let paths = PathGuard::new(&root);
+        let mut engine = Engine::new();
+
+        let missing = call(
+            &mut engine,
+            &paths,
+            "aurum_content_import",
+            json!({"path": "nope.gltf"}),
+        )
+        .unwrap_err();
+        assert!(matches!(missing, ToolError::Invalid(_)), "got {missing:?}");
+
+        let bad_mode = call(
+            &mut engine,
+            &paths,
+            "aurum_content_import",
+            json!({"path": "x.gltf", "mode": "merge"}),
+        )
+        .unwrap_err();
+        assert!(
+            bad_mode.to_string().contains("append or replace"),
+            "got: {bad_mode}"
+        );
+
+        // The same root guard as every other file tool.
+        let denied = call(
+            &mut engine,
+            &paths,
+            "aurum_content_import",
+            json!({"path": "../outside.gltf"}),
+        );
+        assert!(matches!(denied, Err(ToolError::Denied(_))));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

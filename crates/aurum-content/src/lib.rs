@@ -50,6 +50,7 @@
 
 pub mod anim;
 pub mod gltf;
+pub mod gltf_import;
 pub mod mesh;
 pub mod scene;
 pub mod sprite;
@@ -105,6 +106,36 @@ impl Document {
     pub fn add_animation(&mut self, animation: Animation) -> usize {
         self.animations.push(animation);
         self.animations.len() - 1
+    }
+
+    /// Merge another document into this one, remapping its indices.
+    ///
+    /// This is how an imported asset (say, a Blender mesh) joins a scene that
+    /// is already being built: mesh, material, node, and animation references
+    /// are all shifted so the two documents coexist.
+    pub fn append(&mut self, other: Document) {
+        let mesh_offset = self.meshes.len();
+        let material_offset = self.materials.len();
+        let node_offset = self.scene.nodes.len();
+
+        self.meshes.extend(other.meshes);
+        self.materials.extend(other.materials);
+
+        for mut node in other.scene.nodes {
+            node.mesh = node.mesh.map(|m| m + mesh_offset);
+            node.material = node.material.map(|m| m + material_offset);
+            node.children = node.children.iter().map(|c| c + node_offset).collect();
+            self.scene.nodes.push(node);
+        }
+        for root in other.scene.roots {
+            self.scene.roots.push(root + node_offset);
+        }
+        for mut animation in other.animations {
+            for track in &mut animation.tracks {
+                track.node += node_offset;
+            }
+            self.animations.push(animation);
+        }
     }
 
     /// Structural problems that would make an export invalid or useless.
@@ -199,6 +230,62 @@ mod tests {
             .validate()
             .iter()
             .any(|p| p.contains("its own child")));
+    }
+
+    #[test]
+    fn append_remaps_every_index() {
+        let mut target = Document::new("target");
+        let existing = target.add_mesh(box_mesh(1.0, 1.0, 1.0));
+        let existing_material = target.add_material(Material::new("Existing"));
+        let existing_node = target.scene_mut().add_node("Existing");
+        {
+            let node = target.scene_mut().node_mut(existing_node).unwrap();
+            node.mesh = Some(existing);
+            node.material = Some(existing_material);
+        }
+
+        let mut incoming = Document::new("incoming");
+        let mesh = incoming.add_mesh(box_mesh(2.0, 2.0, 2.0));
+        let material = incoming.add_material(Material::new("Incoming"));
+        let parent = incoming.scene_mut().add_node("Parent");
+        let child = incoming.scene_mut().add_child(Some(parent), "Child");
+        for index in [parent, child] {
+            let node = incoming.scene_mut().node_mut(index).unwrap();
+            node.mesh = Some(mesh);
+            node.material = Some(material);
+        }
+        incoming.add_animation(Animation::new("Spin").spin(parent, [0.0, 1.0, 0.0], 1.0, 1.0, 3));
+
+        target.append(incoming);
+
+        assert_eq!(target.meshes.len(), 2);
+        assert_eq!(target.materials.len(), 2);
+        assert_eq!(target.scene.len(), 3);
+        assert_eq!(
+            target.scene.roots.len(),
+            2,
+            "the incoming root is added too"
+        );
+
+        // The appended nodes must point at the appended mesh and material.
+        let appended_parent = target.scene.node(1).unwrap();
+        assert_eq!(appended_parent.mesh, Some(1), "mesh index was not remapped");
+        assert_eq!(
+            appended_parent.material,
+            Some(1),
+            "material index was not remapped"
+        );
+        assert_eq!(
+            appended_parent.children,
+            vec![2],
+            "child index was not remapped"
+        );
+
+        // The animation must follow its node to the new position.
+        let track = &target.animations[0].tracks[0];
+        assert_eq!(track.node, 1, "animation target was not remapped");
+
+        assert!(target.validate().is_empty(), "{:?}", target.validate());
     }
 
     #[test]

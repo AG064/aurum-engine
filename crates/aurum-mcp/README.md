@@ -59,12 +59,12 @@ Point it at the absolute path to `aurum.exe` if it is not on your `PATH`.
 
 ## Tools
 
-45 tools, all prefixed `aurum_`. Every read-only tool carries the
+46 tools, all prefixed `aurum_`. Every read-only tool carries the
 `readOnlyHint` annotation, so a client can filter without a second code path.
 
 They split into a **runtime** group (31 tools: entities, components, events,
 state, time, space, story, save/load) and a **content authoring** group (14
-tools: meshes, materials, nodes, animations, sprites, glTF export).
+tools: meshes, materials, nodes, animations, sprites, glTF import and export).
 
 | Read-only | Mutating |
 |---|---|
@@ -125,6 +125,24 @@ Two conventions matter when scripting this:
 sprite a `color` and it also composes a placeholder PNG, which is enough to
 block out a UI before real art exists. The PNG encoder is written against
 DEFLATE stored blocks, so it needs no compression crate.
+
+### Importing Blender work
+
+`aurum_content_import` reads `.gltf` and `.glb` — including Blender's default
+`.glb` export — back into the same model the procedural tools build. `mode:
+append` (the default) merges into what you have and remaps every index;
+`replace` starts fresh from the file.
+
+That makes the loop bidirectional: a Blender mesh can be imported, inspected,
+transformed, merged with procedural geometry, and exported again. Verified
+against a real 1.9 MB Blender mech — 96 meshes, 66,105 triangles, 2 skeletal
+animations — which round-tripped through MCP and back into Godot with the
+triangle count unchanged.
+
+Interleaved buffers (Blender writes them routinely), normalized integer
+attributes, base64 data URIs, and `matrix` node transforms are all handled.
+Draco and meshopt compression are refused with a message that says to
+re-export without compression, rather than silently producing an empty mesh.
 
 Blender is optional by construction: it exports the same glTF that Aurum
 writes, so a mesh can come from either and still flow through the same
