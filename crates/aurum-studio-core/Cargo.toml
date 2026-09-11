@@ -1,0 +1,15 @@
+[package]
+name = "aurum-studio-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Aurum Studio orchestration: project discovery, toolchain checks, process supervision, and safe builds. No UI, no external dependencies."
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+# Already present in the workspace lock, so these add no new packages.
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -1,0 +1,30 @@
+# Aurum project configuration.
+#
+# Portable by design: no absolute machine paths belong in this file, so a
+# checkout behaves the same on every machine. Machine-specific facts — where
+# Godot lives, where Studio keeps its registry — are discovered or live under
+# %LOCALAPPDATA%\AurumStudio.
+
+schema_version = 1
+name = "aurum-engine"
+godot_version = "4.7"
+rust_package = "aurum-godot"
+addon_destination = "godot/addons/aurum"
+
+modules = [
+    "aurum-core",
+    "aurum-2d",
+    "aurum-3d",
+    "aurum-space",
+    "aurum-vn",
+    "aurum-content",
+    "aurum-mcp",
+    "aurum-editor",
+]
+
+[engine]
+# This checkout *is* the engine.
+path_hint = "."
+
+[validation]
+command = "pwsh scripts/tests/phase0_contract.ps1"

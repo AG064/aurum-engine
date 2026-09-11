@@ -26,6 +26,8 @@ version = "0.1.0"
 dependencies = [
  "aurum-core",
  "aurum-mcp",
+ "aurum-studio-core",
+ "serde_json",
 ]
 
 [[package]]
@@ -85,6 +87,14 @@ version = "0.1.0"
 dependencies = [
  "aurum-core",
  "serde",
+]
+
+[[package]]
+name = "aurum-studio-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
