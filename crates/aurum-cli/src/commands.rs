@@ -658,16 +658,27 @@ pub fn restart(args: &[String]) -> ExitCode {
     }
 }
 
-/// Where the running binary's own checkout is.
+/// Where the running binary's own checkout is, when it can be known.
 ///
-/// The generated workspace refers to the engine by path, and the only path
-/// anybody can be sure of is the one this binary was run from. Walking out of
-/// `target/<profile>/` finds it without asking, which matters because the
-/// person running `aurum new` has not got a project yet to hold the answer.
+/// Only claimed for a binary sitting in a Cargo target directory, because that
+/// is the one layout where walking up three levels means anything. An installed
+/// copy lives somewhere that says nothing about where the engine is: the first
+/// version walked up from `A:\AurumStudio\bin\aurum.exe` and confidently
+/// reported `A:\`, which was written into a new project's configuration as
+/// though it were a fact.
+///
+/// `None` is the honest answer there, and the caller asks for `--engine`
+/// instead. A guess and a fact must not look the same in a file somebody will
+/// later trust.
 fn engine_root() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    // .../target/debug/aurum.exe -> .../target/debug -> .../target -> ...
-    exe.parent()?.parent()?.parent().map(Path::to_path_buf)
+    let executable = std::env::current_exe().ok()?;
+    let profile_directory = executable.parent()?;
+    let target_directory = profile_directory.parent()?;
+
+    if target_directory.file_name()? != "target" {
+        return None;
+    }
+    target_directory.parent().map(Path::to_path_buf)
 }
 
 /// `aurum new <path> [--name <name>] [--template <name>] [--engine <path>]`
