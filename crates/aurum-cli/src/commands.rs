@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use aurum_studio_core::build::{library_name, BuildRequest, Profile};
+use aurum_studio_core::build_queue::BuildLock;
 use aurum_studio_core::doctor::{diagnose, Health};
 use aurum_studio_core::ownership::{OwnershipRecord, ProcessKind};
 use aurum_studio_core::project::clean_path;
@@ -304,6 +305,24 @@ pub fn build(args: &[String]) -> ExitCode {
     let destination = addon.join("bin").join(profile.installed_filename(&library));
 
     let request = BuildRequest::new(&project.root, &package, profile, &destination, cargo);
+
+    // One build writes a project's artifact at a time. The supervisor takes
+    // the same lock, so a bare `aurum build` and a running Studio contend
+    // rather than race to replace the same library.
+    let _lock = match BuildLock::try_acquire(&project.root) {
+        Ok(lock) => lock,
+        Err(error) => {
+            if options.json {
+                println!(
+                    "{}",
+                    serde_json::json!({"built": false, "error": error.to_string()})
+                );
+            } else {
+                eprintln!("aurum: {error}");
+            }
+            return ExitCode::from(exit::FAILED);
+        }
+    };
 
     if !options.json {
         println!(

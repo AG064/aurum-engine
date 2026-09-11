@@ -39,6 +39,7 @@
 //! about what it refuses.
 
 pub mod build;
+pub mod build_queue;
 pub mod doctor;
 pub mod hash;
 pub mod ownership;
@@ -55,6 +56,7 @@ pub mod toolchain;
 pub mod watch;
 
 pub use build::{BuildError, BuildReport, BuildRequest, Profile};
+pub use build_queue::{BuildLock, BuildQueue, LockError, Submission};
 pub use doctor::{Finding, Health, Report};
 pub use hash::{sha256_file, sha256_hex, Sha256};
 pub use ownership::{LiveProcess, OwnershipRecord, ProcessKind};

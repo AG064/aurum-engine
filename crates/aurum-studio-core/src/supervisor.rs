@@ -31,6 +31,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::build::{BuildError, BuildReport, BuildRequest, Profile};
+use crate::build_queue::{BuildLock, LockError};
 use crate::doctor::Health;
 use crate::ownership::ProcessKind;
 use crate::project::Project;
@@ -312,7 +313,20 @@ fn run(config: SupervisorConfig, inbox: Receiver<Command>, events: &Queue) {
 
     // A closed inbox means the `Supervisor` was dropped without a shutdown,
     // which is a normal way to stop.
-    while let Ok(command) = inbox.recv() {
+    //
+    // Commands displaced while a burst of builds collapses are held here
+    // rather than dropped, so coalescing never reorders or loses work.
+    let mut held: VecDeque<Command> = VecDeque::new();
+
+    loop {
+        let command = match held.pop_front() {
+            Some(command) => command,
+            None => match inbox.recv() {
+                Ok(command) => command,
+                Err(_) => break,
+            },
+        };
+
         match command {
             Command::Shutdown => break,
 
@@ -335,14 +349,66 @@ fn run(config: SupervisorConfig, inbox: Receiver<Command>, events: &Queue) {
                 });
             }
 
-            Command::Build { force, release } => {
-                let Some(request) = build_request(&config.project, release) else {
+            Command::Build {
+                force: mut latest_force,
+                release: mut latest_release,
+            } => {
+                // Collapse a burst into the newest request. Pressing Build five
+                // times should produce one build of the current source, not
+                // five builds of states that no longer exist. Anything that is
+                // not a build is set aside and runs afterwards, in order.
+                let mut collapsed = 0usize;
+                while let Ok(next) = inbox.try_recv() {
+                    match next {
+                        Command::Build { force, release } => {
+                            latest_force = force;
+                            latest_release = release;
+                            collapsed += 1;
+                        }
+                        other => held.push_back(other),
+                    }
+                }
+                if collapsed > 0 {
+                    events.push(Event::Log(format!(
+                        "{collapsed} earlier build request{} superseded",
+                        if collapsed == 1 { " was" } else { "s were" }
+                    )));
+                }
+
+                let Some(request) = build_request(&config.project, latest_release) else {
                     events.push(Event::Error(
                         "the project does not say which crate builds the extension, or where \
                          the add-on lives"
                             .into(),
                     ));
                     continue;
+                };
+
+                // The lock is what actually enforces "one build writes the
+                // artifact at a time". The worker thread only serializes the
+                // commands inside *this* process, and a person can easily have
+                // `aurum dev`, the shell, and a bare `aurum build` open at
+                // once. Taken before the build starts and held until it ends;
+                // a refused build reports rather than waits, so a caller is
+                // never left watching nothing happen.
+                let _lock = match BuildLock::try_acquire(&config.project.root) {
+                    Ok(lock) => lock,
+                    Err(LockError::Held { by }) => {
+                        events.push(Event::BuildFinished {
+                            ok: false,
+                            summary: LockError::Held { by }.to_string(),
+                            installed_sha256: None,
+                        });
+                        continue;
+                    }
+                    Err(LockError::Io(detail)) => {
+                        events.push(Event::BuildFinished {
+                            ok: false,
+                            summary: detail,
+                            installed_sha256: None,
+                        });
+                        continue;
+                    }
                 };
 
                 events.push(Event::BuildStarted {
@@ -356,7 +422,7 @@ fn run(config: SupervisorConfig, inbox: Receiver<Command>, events: &Queue) {
 
                 // A result is reported whatever happens. A caller waiting on
                 // `BuildFinished` would otherwise wait forever.
-                match crate::build::run(&request, force, config.build_timeout) {
+                match crate::build::run(&request, latest_force, config.build_timeout) {
                     Ok(report) => push_build_success(events, &report),
                     Err(error) => events.push(Event::BuildFinished {
                         ok: false,
@@ -709,6 +775,10 @@ mod tests {
     }
 
     /// A project that opens, so the worker has something real to act on.
+    ///
+    /// The add-on directory has to exist: discovery records it only when it is
+    /// really there, so without it every build request is refused before it
+    /// reaches the queue and these tests would assert nothing.
     fn temporary_project(tag: &str) -> Project {
         let root = unique_directory(tag);
         std::fs::write(
@@ -719,6 +789,8 @@ mod tests {
         .expect("write aurum.toml");
         std::fs::write(root.join("project.godot"), "config_version=5\n")
             .expect("write project.godot");
+        std::fs::create_dir_all(root.join("godot").join("addons").join("aurum").join("bin"))
+            .expect("create the add-on directory");
         Project::open(&root).expect("the temporary project should open")
     }
 
@@ -879,6 +951,141 @@ mod tests {
             accepted, 0,
             "a stopped supervisor must not accept work it cannot do"
         );
+    }
+
+    #[test]
+    fn a_burst_of_build_requests_does_not_become_a_burst_of_builds() {
+        // Pressing Build ten times must not queue ten builds of states that no
+        // longer exist. This is the integration half of `BuildQueue`'s unit
+        // tests: the property asserted is the one that matters — fewer builds
+        // ran than were asked for — rather than an exact count, because how
+        // many requests are in the channel at the moment the worker drains is
+        // genuinely a race, and pinning it would make the test flaky rather
+        // than strict.
+        let project = temporary_project("coalesce");
+        let supervisor = Supervisor::start(SupervisorConfig::new(project, None));
+
+        let sent = 10;
+        for _ in 0..sent {
+            assert!(supervisor.send(Command::Build {
+                force: false,
+                release: false
+            }));
+        }
+
+        // Collect until the supervisor goes quiet.
+        let mut started = 0;
+        let mut finished = 0;
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let mut quiet_since = std::time::Instant::now();
+        while std::time::Instant::now() < deadline {
+            match supervisor.recv_timeout(Duration::from_millis(250)) {
+                Some(Event::BuildStarted { .. }) => {
+                    started += 1;
+                    quiet_since = std::time::Instant::now();
+                }
+                Some(Event::BuildFinished { .. }) => {
+                    finished += 1;
+                    quiet_since = std::time::Instant::now();
+                }
+                Some(_) => {}
+                // Idle long enough that nothing more is coming.
+                None if quiet_since.elapsed() > Duration::from_secs(3) => break,
+                None => {}
+            }
+        }
+
+        assert!(started >= 1, "at least one build should have run");
+        assert!(
+            started < sent,
+            "coalescing should mean fewer builds ({started}) than requests ({sent})"
+        );
+        assert_eq!(
+            started, finished,
+            "every build that started must report a result; a caller waiting on \
+             one would otherwise wait forever"
+        );
+
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn a_build_refuses_rather_than_racing_another_process() {
+        // The cross-process guarantee, seen from the supervisor. Held here with
+        // the same operating-system mechanism a second Studio would use, and
+        // verified for real against a second process before this test existed.
+        let project = temporary_project("locked");
+        let _held = crate::build_queue::BuildLock::try_acquire(&project.root)
+            .expect("the test should be able to take the lock");
+
+        let supervisor = Supervisor::start(SupervisorConfig::new(project, None));
+        assert!(supervisor.send(Command::Build {
+            force: false,
+            release: false
+        }));
+
+        let event = wait_for(&supervisor, |e| matches!(e, Event::BuildFinished { .. }))
+            .expect("a refused build must still report a result");
+        match event {
+            Event::BuildFinished {
+                ok,
+                summary,
+                installed_sha256,
+            } => {
+                assert!(!ok, "the build should not have been attempted");
+                assert!(
+                    summary.contains("already building"),
+                    "the refusal should say why, got '{summary}'"
+                );
+                assert!(installed_sha256.is_none());
+            }
+            other => panic!("expected a build result, got {other:?}"),
+        }
+
+        // And no build was started, which is the point of refusing. Checked
+        // over a short fixed window rather than with `wait_for`, which would
+        // sit out its whole deadline waiting for an event that is correctly
+        // never coming.
+        let mut started = false;
+        let settle = std::time::Instant::now() + Duration::from_millis(1500);
+        while std::time::Instant::now() < settle {
+            if matches!(
+                supervisor.recv_timeout(Duration::from_millis(200)),
+                Some(Event::BuildStarted { .. })
+            ) {
+                started = true;
+                break;
+            }
+        }
+        assert!(!started, "a refused build must not have started cargo");
+
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn a_command_sent_during_a_build_burst_is_not_lost() {
+        // Coalescing sets aside anything that is not a build. It must come
+        // back, and in order, rather than being swallowed by the collapse.
+        let project = temporary_project("burst");
+        let supervisor = Supervisor::start(SupervisorConfig::new(project, None));
+
+        assert!(supervisor.send(Command::Build {
+            force: false,
+            release: false
+        }));
+        assert!(supervisor.send(Command::Doctor));
+        assert!(supervisor.send(Command::Build {
+            force: false,
+            release: false
+        }));
+
+        let health = wait_for(&supervisor, |e| matches!(e, Event::Health { .. }));
+        assert!(
+            health.is_some(),
+            "the doctor between two builds must still be answered"
+        );
+
+        supervisor.shutdown();
     }
 
     #[test]
