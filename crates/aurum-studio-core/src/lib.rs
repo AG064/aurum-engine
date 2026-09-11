@@ -24,6 +24,7 @@
 //! - [`reload`] — what a change costs the running editor
 //! - [`session`] — session identity, state directory, and logs
 //! - [`supervise`] — launching and stopping the processes a session owns
+//! - [`supervisor`] — typed commands in, bounded events out, off the caller's thread
 //! - [`watch`] — noticing that a project changed
 //! - [`hash`] — SHA-256, for verifying artifacts
 //!
@@ -48,6 +49,7 @@ pub mod registry;
 pub mod reload;
 pub mod session;
 pub mod supervise;
+pub mod supervisor;
 pub mod toml;
 pub mod toolchain;
 pub mod watch;
@@ -63,5 +65,8 @@ pub use registry::{Entry, Registry, RegistryError};
 pub use reload::{classify_all, classify_change, classify_path, Classification, Verdict};
 pub use session::{redact, Session};
 pub use supervise::{launch, stop_session, terminate, LaunchRequest, StopOutcome};
+pub use supervisor::{
+    Command as StudioCommand, Event as StudioEvent, Supervisor, SupervisorConfig,
+};
 pub use toolchain::{Tool, Toolchain};
 pub use watch::{Change, ChangeKind, Debouncer, Watcher};

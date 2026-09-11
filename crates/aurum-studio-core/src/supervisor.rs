@@ -1,0 +1,904 @@
+//! The supervisor: typed commands in, bounded events out.
+//!
+//! The design requires that "the UI thread never waits for builds, file
+//! operations, or child processes", with "a supervisor worker owning
+//! asynchronous work and sending bounded events". This is that worker.
+//!
+//! It exists ahead of any particular UI on purpose. Whatever the shell turns
+//! out to be — a window, a page, a terminal — it needs the same two things: a
+//! way to ask for work without blocking, and a stream of what happened. The CLI
+//! and any future shell are adapters over this, not implementations of it.
+//!
+//! ## Why the queue is bounded, and what gets dropped
+//!
+//! A build produces far more log lines than a person can read, and an
+//! unbounded queue would grow without limit if nobody is draining it. So the
+//! queue has a capacity, and when it is full the **oldest droppable** event is
+//! discarded.
+//!
+//! Not every event is droppable. Losing a log line costs a little history;
+//! losing `BuildFinished` would leave a caller waiting forever for a result
+//! that already happened, and losing `ProcessStopped` would leave a window
+//! claiming something is running that is not. Events that carry state are
+//! never dropped, and the consumer can ask how many were.
+
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::JoinHandle;
+use std::time::Duration;
+
+use crate::build::{BuildError, BuildReport, BuildRequest, Profile};
+use crate::doctor::Health;
+use crate::ownership::ProcessKind;
+use crate::project::Project;
+use crate::reload::Verdict;
+use crate::supervise;
+
+/// How many events are held before droppable ones start being discarded.
+pub const DEFAULT_EVENT_CAPACITY: usize = 512;
+
+/// What a caller can ask the supervisor to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Command {
+    /// Re-check the project and report health.
+    Doctor,
+    /// Build and install the extension.
+    Build { force: bool, release: bool },
+    /// Launch the editor.
+    StartEditor,
+    /// Launch the game.
+    StartGame,
+    /// Stop everything this session started.
+    Stop { force: bool },
+    /// Stop the worker. Nothing after it is processed.
+    Shutdown,
+}
+
+/// Something that happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Event {
+    /// A health report.
+    Health {
+        verdict: Health,
+        summary: String,
+    },
+    BuildStarted {
+        package: String,
+        profile: &'static str,
+    },
+    BuildFinished {
+        ok: bool,
+        summary: String,
+        installed_sha256: Option<String>,
+    },
+    ProcessStarted {
+        kind: ProcessKind,
+        pid: u32,
+    },
+    ProcessStopped {
+        kind: ProcessKind,
+        description: String,
+    },
+    /// A change was classified, with the reason a person needs to read.
+    ChangeClassified {
+        verdict: Verdict,
+        reason: String,
+    },
+    Log(String),
+    Error(String),
+    /// The worker has stopped.
+    Stopped,
+}
+
+impl Event {
+    /// Whether losing this event would lose state rather than history.
+    ///
+    /// Log lines and change classifications are history: a caller that misses
+    /// one is less informed but not stuck, and the next change re-reports the
+    /// same verdict anyway. Everything else is a result or a transition.
+    pub fn is_droppable(&self) -> bool {
+        matches!(self, Self::Log(_) | Self::ChangeClassified { .. })
+    }
+
+    /// A short line for a log view.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Health { verdict, summary } => {
+                format!("health: {} ({summary})", verdict.label())
+            }
+            Self::BuildStarted { package, profile } => format!("building {package} ({profile})"),
+            Self::BuildFinished {
+                ok,
+                summary,
+                installed_sha256,
+            } => match (ok, installed_sha256) {
+                (true, Some(hash)) => format!("build ok: {summary} [{hash}]"),
+                (true, None) => format!("build ok: {summary}"),
+                (false, _) => format!("build failed: {summary}"),
+            },
+            Self::ProcessStarted { kind, pid } => format!("{} started (pid {pid})", kind.label()),
+            Self::ProcessStopped { kind, description } => {
+                format!("{}: {description}", kind.label())
+            }
+            Self::ChangeClassified { verdict, reason } => {
+                format!("{}: {reason}", verdict.label())
+            }
+            Self::Log(line) => line.clone(),
+            Self::Error(message) => format!("error: {message}"),
+            Self::Stopped => "supervisor stopped".to_string(),
+        }
+    }
+}
+
+/// A bounded, thread-safe event queue.
+#[derive(Debug)]
+struct Queue {
+    events: Mutex<VecDeque<Event>>,
+    /// Signalled whenever an event arrives or the queue closes, so a waiting
+    /// consumer wakes instead of sleeping out its whole timeout.
+    signal: Condvar,
+    capacity: usize,
+    dropped: Mutex<usize>,
+    closed: AtomicBool,
+}
+
+impl Queue {
+    fn new(capacity: usize) -> Self {
+        Self {
+            events: Mutex::new(VecDeque::new()),
+            signal: Condvar::new(),
+            // A caller passing zero gets a working queue rather than one that
+            // discards everything it is given.
+            capacity: capacity.max(1),
+            dropped: Mutex::new(0),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    fn push(&self, event: Event) {
+        let mut events = self.events.lock().unwrap_or_else(|e| e.into_inner());
+
+        if events.len() >= self.capacity {
+            // Drop the oldest droppable event, wherever it sits. Dropping the
+            // front outright could discard a result, leaving a caller waiting
+            // for something that already happened.
+            if let Some(index) = events.iter().position(Event::is_droppable) {
+                events.remove(index);
+                *self.dropped.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+            }
+            // Nothing droppable: the queue grows rather than losing a result.
+            // Bounded in practice, because every non-droppable event
+            // corresponds to a command the caller chose to send.
+        }
+
+        events.push_back(event);
+        self.signal.notify_all();
+    }
+
+    fn pop(&self, timeout: Duration) -> Option<Event> {
+        let mut events = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        if events.is_empty() {
+            if self.closed.load(Ordering::SeqCst) {
+                return None;
+            }
+            let (guard, _) = self
+                .signal
+                .wait_timeout(events, timeout)
+                .unwrap_or_else(|e| e.into_inner());
+            events = guard;
+        }
+        events.pop_front()
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        self.signal.notify_all();
+    }
+
+    /// Take the dropped count, resetting it.
+    fn take_dropped(&self) -> usize {
+        let mut dropped = self.dropped.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut *dropped)
+    }
+}
+
+/// What the supervisor needs to do its job.
+pub struct SupervisorConfig {
+    pub project: Project,
+    /// An explicit Godot path; when set it is authoritative.
+    pub godot_hint: Option<PathBuf>,
+    /// How long a build may take.
+    pub build_timeout: Duration,
+    /// How long to wait for a process to close politely.
+    pub stop_timeout: Duration,
+}
+
+impl SupervisorConfig {
+    /// Defaults for the two timeouts, matching the CLI.
+    pub fn new(project: Project, godot_hint: Option<PathBuf>) -> Self {
+        Self {
+            project,
+            godot_hint,
+            build_timeout: Duration::from_secs(30 * 60),
+            stop_timeout: Duration::from_secs(45),
+        }
+    }
+}
+
+/// A running supervisor worker.
+pub struct Supervisor {
+    commands: Sender<Command>,
+    events: Arc<Queue>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl Supervisor {
+    /// Start a worker for a project.
+    pub fn start(config: SupervisorConfig) -> Self {
+        Self::with_capacity(config, DEFAULT_EVENT_CAPACITY)
+    }
+
+    /// Start a worker with an explicit event capacity.
+    pub fn with_capacity(config: SupervisorConfig, capacity: usize) -> Self {
+        let (commands, inbox) = mpsc::channel::<Command>();
+        let events = Arc::new(Queue::new(capacity));
+        let worker_events = Arc::clone(&events);
+
+        let worker = std::thread::spawn(move || {
+            run(config, inbox, &worker_events);
+            // The stop is announced before closing so a consumer waiting for
+            // it wakes, sees it, and then sees the queue close.
+            worker_events.push(Event::Stopped);
+            worker_events.close();
+        });
+
+        Self {
+            commands,
+            events,
+            worker: Some(worker),
+        }
+    }
+
+    /// Ask for something. Returns `false` once the worker has stopped, so a
+    /// caller does not wait for an answer that will never come.
+    pub fn send(&self, command: Command) -> bool {
+        self.commands.send(command).is_ok()
+    }
+
+    /// The next event, waiting up to `timeout`.
+    pub fn recv_timeout(&self, timeout: Duration) -> Option<Event> {
+        self.events.pop(timeout)
+    }
+
+    /// The next event if one is already waiting.
+    pub fn try_recv(&self) -> Option<Event> {
+        self.events.pop(Duration::ZERO)
+    }
+
+    /// How many events were dropped to keep the queue bounded.
+    pub fn dropped(&self) -> usize {
+        self.events.take_dropped()
+    }
+
+    /// Ask the worker to stop and wait for it.
+    pub fn shutdown(mut self) {
+        self.stop_worker();
+    }
+
+    fn stop_worker(&mut self) {
+        // A send can fail because the worker already exited on its own, which
+        // is not an error worth reporting: either way it is stopping.
+        let _ = self.commands.send(Command::Shutdown);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        // Dropping without an explicit shutdown must not leave a thread
+        // running against a project the caller has moved on from.
+        self.stop_worker();
+    }
+}
+
+/// The worker loop.
+fn run(config: SupervisorConfig, inbox: Receiver<Command>, events: &Queue) {
+    let mut session: Option<crate::session::Session> = None;
+
+    // A closed inbox means the `Supervisor` was dropped without a shutdown,
+    // which is a normal way to stop.
+    while let Ok(command) = inbox.recv() {
+        match command {
+            Command::Shutdown => break,
+
+            Command::Doctor => {
+                let toolchain =
+                    crate::toolchain::discover(&config.project, config.godot_hint.as_deref());
+                let report = crate::doctor::diagnose(
+                    &config.project,
+                    &toolchain,
+                    config.godot_hint.as_deref(),
+                );
+                events.push(Event::Health {
+                    verdict: report.health(),
+                    summary: format!(
+                        "{} ok, {} warnings, {} blocked",
+                        report.count(Health::Healthy),
+                        report.count(Health::Warning),
+                        report.count(Health::Blocked)
+                    ),
+                });
+            }
+
+            Command::Build { force, release } => {
+                let Some(request) = build_request(&config.project, release) else {
+                    events.push(Event::Error(
+                        "the project does not say which crate builds the extension, or where \
+                         the add-on lives"
+                            .into(),
+                    ));
+                    continue;
+                };
+
+                events.push(Event::BuildStarted {
+                    package: request.package.clone(),
+                    profile: if request.profile.is_debug() {
+                        "debug"
+                    } else {
+                        "release"
+                    },
+                });
+
+                // A result is reported whatever happens. A caller waiting on
+                // `BuildFinished` would otherwise wait forever.
+                match crate::build::run(&request, force, config.build_timeout) {
+                    Ok(report) => push_build_success(events, &report),
+                    Err(error) => events.push(Event::BuildFinished {
+                        ok: false,
+                        summary: describe_build_error(&error),
+                        installed_sha256: None,
+                    }),
+                }
+            }
+
+            Command::StartEditor => {
+                start_process(&config, &mut session, events, ProcessKind::Editor)
+            }
+            Command::StartGame => start_process(&config, &mut session, events, ProcessKind::Game),
+
+            Command::Stop { force } => match &session {
+                Some(session) => {
+                    for (kind, outcome) in
+                        supervise::stop_session(session, force, config.stop_timeout)
+                    {
+                        events.push(Event::ProcessStopped {
+                            kind,
+                            description: outcome.describe(kind),
+                        });
+                    }
+                }
+                None => events.push(Event::Log("nothing is running".into())),
+            },
+        }
+    }
+}
+
+fn start_process(
+    config: &SupervisorConfig,
+    session: &mut Option<crate::session::Session>,
+    events: &Queue,
+    kind: ProcessKind,
+) {
+    if session.is_none() {
+        match crate::session::Session::create(&config.project.root) {
+            Ok(created) => *session = Some(created),
+            Err(error) => {
+                events.push(Event::Error(format!("could not start a session: {error}")));
+                return;
+            }
+        }
+    }
+    // `session` was just filled, so this cannot be `None`.
+    let Some(active) = session.as_ref() else {
+        return;
+    };
+
+    let Some(godot_project) = config.project.godot_project_dir().map(Path::to_path_buf) else {
+        events.push(Event::Error(
+            "no project.godot was found, so there is nothing to launch".into(),
+        ));
+        return;
+    };
+    let Some(godot) =
+        crate::toolchain::discover_godot_to_launch(&config.project, config.godot_hint.as_deref())
+    else {
+        events.push(Event::Error(
+            "Godot was not found; pass an explicit path if it is not on PATH".into(),
+        ));
+        return;
+    };
+
+    let mut request = supervise::LaunchRequest::godot(&godot, &godot_project, &config.project.root);
+    request.kind = kind;
+    request.environment = supervise::bridge_environment(active, None);
+
+    match supervise::launch(&request, active) {
+        Ok(launched) => events.push(Event::ProcessStarted {
+            kind: launched.record.kind,
+            pid: launched.pid(),
+        }),
+        Err(error) => events.push(Event::Error(error.to_string())),
+    }
+}
+
+fn build_request(project: &Project, release: bool) -> Option<BuildRequest> {
+    let package = project.config.rust_package.clone()?;
+    let addon = project.layout.addon_directory.clone()?;
+    let cargo = crate::toolchain::find_on_path("cargo")?;
+    let profile = if release {
+        Profile::Release
+    } else {
+        Profile::Debug
+    };
+    let destination = addon
+        .join("bin")
+        .join(profile.installed_filename(&crate::build::library_name(&package)));
+    Some(BuildRequest::new(
+        &project.root,
+        package,
+        profile,
+        destination,
+        cargo,
+    ))
+}
+
+fn push_build_success(events: &Queue, report: &BuildReport) {
+    events.push(Event::Log(report.summary()));
+    events.push(Event::BuildFinished {
+        ok: true,
+        summary: report.summary(),
+        installed_sha256: Some(report.installed.sha256.clone()),
+    });
+}
+
+fn describe_build_error(error: &BuildError) -> String {
+    match error {
+        // Cargo's own output is many lines; the first names the failure.
+        BuildError::Cargo(detail) => detail
+            .lines()
+            .next()
+            .unwrap_or("the build failed")
+            .to_string(),
+        other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    // -- the queue ---------------------------------------------------------
+
+    fn log(index: usize) -> Event {
+        Event::Log(format!("line {index}"))
+    }
+
+    #[test]
+    fn log_lines_are_droppable_and_results_are_not() {
+        assert!(Event::Log("x".into()).is_droppable());
+        assert!(Event::ChangeClassified {
+            verdict: Verdict::Reload,
+            reason: "r".into()
+        }
+        .is_droppable());
+
+        // Losing any of these would leave a caller waiting, or a view
+        // claiming something that is no longer true.
+        assert!(!Event::Stopped.is_droppable());
+        assert!(!Event::BuildFinished {
+            ok: true,
+            summary: "s".into(),
+            installed_sha256: None
+        }
+        .is_droppable());
+        assert!(!Event::Error("x".into()).is_droppable());
+        assert!(!Event::Health {
+            verdict: Health::Healthy,
+            summary: "s".into()
+        }
+        .is_droppable());
+        assert!(!Event::ProcessStopped {
+            kind: ProcessKind::Editor,
+            description: "d".into()
+        }
+        .is_droppable());
+    }
+
+    #[test]
+    fn the_queue_holds_up_to_capacity() {
+        let queue = Queue::new(4);
+        for index in 0..4 {
+            queue.push(log(index));
+        }
+        assert_eq!(queue.take_dropped(), 0);
+
+        let mut count = 0;
+        while queue.pop(Duration::ZERO).is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 4);
+    }
+
+    #[test]
+    fn a_full_queue_drops_the_oldest_log_line() {
+        let queue = Queue::new(3);
+        for index in 0..3 {
+            queue.push(log(index));
+        }
+        queue.push(log(99));
+
+        assert_eq!(queue.take_dropped(), 1, "one line should have been dropped");
+        let mut lines = Vec::new();
+        while let Some(Event::Log(text)) = queue.pop(Duration::ZERO) {
+            lines.push(text);
+        }
+        // The oldest goes; the newest survives.
+        assert_eq!(lines, vec!["line 1", "line 2", "line 99"]);
+    }
+
+    #[test]
+    fn a_result_is_never_dropped_even_when_the_queue_is_full_of_results() {
+        // Every entry is a result, so there is nothing safe to discard. The
+        // queue grows rather than losing one.
+        let queue = Queue::new(2);
+        queue.push(Event::Stopped);
+        queue.push(Event::Error("one".into()));
+        queue.push(Event::Error("two".into()));
+
+        assert_eq!(queue.take_dropped(), 0);
+        let mut count = 0;
+        while queue.pop(Duration::ZERO).is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 3, "no result should be lost");
+    }
+
+    #[test]
+    fn a_result_survives_a_flood_of_log_lines() {
+        // The realistic case: a build emits hundreds of lines while one result
+        // waits behind them.
+        let queue = Queue::new(8);
+        queue.push(Event::BuildStarted {
+            package: "aurum-godot".into(),
+            profile: "debug",
+        });
+        for index in 0..100 {
+            queue.push(log(index));
+        }
+        queue.push(Event::BuildFinished {
+            ok: true,
+            summary: "done".into(),
+            installed_sha256: Some("abc".into()),
+        });
+
+        let mut saw_finished = false;
+        let mut saw_started = false;
+        while let Some(item) = queue.pop(Duration::ZERO) {
+            match item {
+                Event::BuildFinished { .. } => saw_finished = true,
+                Event::BuildStarted { .. } => saw_started = true,
+                _ => {}
+            }
+        }
+        assert!(saw_started, "the build start should survive");
+        assert!(saw_finished, "the build result must survive");
+        assert!(
+            queue.take_dropped() > 0,
+            "log lines should have been dropped, or the test proves nothing"
+        );
+    }
+
+    #[test]
+    fn order_is_preserved_for_what_survives() {
+        let queue = Queue::new(64);
+        let mut expected = Vec::new();
+        for index in 0..5 {
+            queue.push(log(index));
+            expected.push(format!("line {index}"));
+        }
+        let mut lines = Vec::new();
+        while let Some(Event::Log(text)) = queue.pop(Duration::ZERO) {
+            lines.push(text);
+        }
+        assert_eq!(lines, expected);
+    }
+
+    #[test]
+    fn popping_from_an_empty_queue_times_out() {
+        let queue = Queue::new(4);
+        let started = std::time::Instant::now();
+        assert!(queue.pop(Duration::from_millis(80)).is_none());
+        assert!(
+            started.elapsed() >= Duration::from_millis(50),
+            "an empty queue should wait, not spin"
+        );
+    }
+
+    #[test]
+    fn a_waiting_consumer_wakes_when_an_event_arrives() {
+        let queue = Arc::new(Queue::new(4));
+        let producer = Arc::clone(&queue);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            producer.push(Event::Stopped);
+        });
+        // Without the condvar this blocks for the full timeout and then
+        // reports nothing, which is the bug this guards.
+        assert_eq!(queue.pop(Duration::from_secs(5)), Some(Event::Stopped));
+    }
+
+    #[test]
+    fn closing_the_queue_releases_a_waiting_consumer() {
+        let queue = Arc::new(Queue::new(4));
+        let closer = Arc::clone(&queue);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            closer.close();
+        });
+        let started = std::time::Instant::now();
+        // `None` promptly rather than blocking for the full timeout: the
+        // worker is gone, so no event can ever arrive.
+        assert_eq!(queue.pop(Duration::from_secs(30)), None);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_zero_capacity_queue_still_works() {
+        let queue = Queue::new(0);
+        queue.push(Event::Stopped);
+        assert_eq!(queue.pop(Duration::ZERO), Some(Event::Stopped));
+    }
+
+    #[test]
+    fn events_describe_themselves() {
+        assert!(Event::Log("plain".into()).describe().contains("plain"));
+        assert!(Event::Error("broke".into()).describe().contains("broke"));
+        assert!(Event::BuildStarted {
+            package: "p".into(),
+            profile: "debug"
+        }
+        .describe()
+        .contains("building p"));
+        assert!(Event::BuildFinished {
+            ok: false,
+            summary: "the compiler said no".into(),
+            installed_sha256: None
+        }
+        .describe()
+        .contains("failed"));
+        assert!(Event::ProcessStarted {
+            kind: ProcessKind::Editor,
+            pid: 7
+        }
+        .describe()
+        .contains('7'));
+        assert!(Event::ChangeClassified {
+            verdict: Verdict::EditorRestart,
+            reason: "why".into()
+        }
+        .describe()
+        .contains("editor restart"));
+    }
+
+    // -- the worker --------------------------------------------------------
+
+    fn unique_directory(tag: &str) -> PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path =
+            std::env::temp_dir().join(format!("aurum-supervisor-{tag}-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create temp directory");
+        path
+    }
+
+    /// A project that opens, so the worker has something real to act on.
+    fn temporary_project(tag: &str) -> Project {
+        let root = unique_directory(tag);
+        std::fs::write(
+            root.join("aurum.toml"),
+            "schema_version = 1\nname = \"supervisor-test\"\n\
+             rust_package = \"aurum-godot\"\naddon_destination = \"godot/addons/aurum\"\n",
+        )
+        .expect("write aurum.toml");
+        std::fs::write(root.join("project.godot"), "config_version=5\n")
+            .expect("write project.godot");
+        Project::open(&root).expect("the temporary project should open")
+    }
+
+    /// Collect events until one satisfies `wanted`, or the deadline passes.
+    fn wait_for(supervisor: &Supervisor, wanted: impl Fn(&Event) -> bool) -> Option<Event> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            match supervisor.recv_timeout(Duration::from_millis(500)) {
+                Some(event) if wanted(&event) => return Some(event),
+                Some(_) => continue,
+                None => continue,
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn a_doctor_command_produces_a_health_event() {
+        let project = temporary_project("doctor");
+        let supervisor = Supervisor::start(SupervisorConfig::new(project, None));
+
+        assert!(supervisor.send(Command::Doctor));
+        let event = wait_for(&supervisor, |e| matches!(e, Event::Health { .. }))
+            .expect("doctor should report health");
+        match event {
+            Event::Health { summary, .. } => {
+                assert!(
+                    summary.contains("ok"),
+                    "the summary should count findings, got '{summary}'"
+                );
+            }
+            other => panic!("expected health, got {other:?}"),
+        }
+
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn a_build_without_a_package_reports_an_error_rather_than_waiting() {
+        // No `rust_package` means no build can be attempted. The command must
+        // still answer, because a caller is blocked on a result either way.
+        let root = unique_directory("nopackage");
+        std::fs::write(
+            root.join("aurum.toml"),
+            "schema_version = 1\nname = \"bare\"\n",
+        )
+        .expect("write aurum.toml");
+        let project = Project::open(&root).expect("the project should open");
+
+        let supervisor = Supervisor::start(SupervisorConfig::new(project, None));
+        assert!(supervisor.send(Command::Build {
+            force: false,
+            release: false
+        }));
+
+        let event = wait_for(&supervisor, |e| matches!(e, Event::Error(_)))
+            .expect("an unbuildable project should report an error");
+        match event {
+            Event::Error(message) => assert!(
+                message.contains("which crate") || message.contains("add-on"),
+                "the error should say what is missing, got '{message}'"
+            ),
+            other => panic!("expected an error, got {other:?}"),
+        }
+
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn stopping_with_nothing_running_is_not_an_error() {
+        let project = temporary_project("stopempty");
+        let supervisor = Supervisor::start(SupervisorConfig::new(project, None));
+
+        assert!(supervisor.send(Command::Stop { force: false }));
+        let event = wait_for(&supervisor, |e| matches!(e, Event::Log(_)))
+            .expect("stopping an idle session should say so");
+        assert!(event.describe().contains("nothing is running"));
+
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn a_run_of_commands_is_answered_in_order() {
+        let project = temporary_project("ordered");
+        let supervisor = Supervisor::start(SupervisorConfig::new(project, None));
+
+        assert!(supervisor.send(Command::Doctor));
+        assert!(supervisor.send(Command::Stop { force: false }));
+
+        let mut saw_health = false;
+        let mut saw_idle = false;
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !(saw_health && saw_idle) && std::time::Instant::now() < deadline {
+            match supervisor.recv_timeout(Duration::from_millis(500)) {
+                Some(Event::Health { .. }) => {
+                    assert!(
+                        !saw_idle,
+                        "health was answered after the stop that followed it"
+                    );
+                    saw_health = true;
+                }
+                Some(Event::Log(text)) if text.contains("nothing is running") => {
+                    assert!(
+                        saw_health,
+                        "the stop was answered before the doctor before it"
+                    );
+                    saw_idle = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_health && saw_idle, "both commands should be answered");
+
+        supervisor.shutdown();
+    }
+
+    #[test]
+    fn shutdown_announces_itself_and_closes_the_queue() {
+        let project = temporary_project("shutdown");
+        let supervisor = Supervisor::start(SupervisorConfig::new(project, None));
+
+        // The worker is idle, so this is processed at once.
+        supervisor.shutdown();
+
+        // The supervisor has been consumed, so assert on a fresh one that the
+        // terminal event is observable to a live consumer.
+        let project = temporary_project("shutdown-live");
+        let supervisor = Supervisor::start(SupervisorConfig::new(project, None));
+        assert!(supervisor.send(Command::Shutdown));
+        let event = wait_for(&supervisor, |e| matches!(e, Event::Stopped))
+            .expect("shutdown should be announced");
+        assert_eq!(event, Event::Stopped);
+        // And the queue closes behind it, so a waiting consumer is released.
+        assert!(supervisor.recv_timeout(Duration::from_secs(10)).is_none());
+    }
+
+    #[test]
+    fn sending_after_shutdown_is_refused_rather_than_silently_lost() {
+        let project = temporary_project("after");
+        let supervisor = Supervisor::start(SupervisorConfig::new(project, None));
+
+        assert!(supervisor.send(Command::Shutdown));
+        // Wait for the worker to actually finish.
+        let _ = wait_for(&supervisor, |e| matches!(e, Event::Stopped));
+        let _ = supervisor.recv_timeout(Duration::from_secs(10));
+
+        let mut accepted = 0;
+        for _ in 0..50 {
+            if supervisor.send(Command::Doctor) {
+                accepted += 1;
+            }
+            if accepted > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            accepted, 0,
+            "a stopped supervisor must not accept work it cannot do"
+        );
+    }
+
+    #[test]
+    fn dropping_a_supervisor_stops_its_worker() {
+        // Without the `Drop` impl this test would finish with a thread still
+        // running against a deleted project directory.
+        let project = temporary_project("dropped");
+        let supervisor = Supervisor::start(SupervisorConfig::new(project, None));
+        assert!(supervisor.send(Command::Doctor));
+        drop(supervisor);
+    }
+
+    #[test]
+    fn the_dropped_count_is_reported_once() {
+        let queue = Queue::new(2);
+        for index in 0..10 {
+            queue.push(log(index));
+        }
+        let first = queue.take_dropped();
+        assert!(first > 0);
+        assert_eq!(queue.take_dropped(), 0, "the count should reset when read");
+    }
+}
