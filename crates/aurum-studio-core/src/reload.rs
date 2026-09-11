@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn a_set_of_changes_reports_the_worst() {
-        let changes = vec![
+        let changes = [
             (path("README.md"), None),
             (path("godot/scripts/a.gd"), None),
             (path("crates/aurum-core/src/lib.rs"), None),
@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn a_restart_wins_over_everything_else_in_a_set() {
         let restarting = "impl X { #[func] fn y(&self) {} }".to_string();
-        let changes = vec![
+        let changes = [
             (path("godot/scripts/a.gd"), None),
             (
                 path("crates/aurum-godot/src/lib.rs"),
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn one_restart_is_reported_once_however_many_files_caused_it() {
         let source = "impl X { #[func] fn y(&self) {} }".to_string();
-        let changes = vec![
+        let changes = [
             (path("crates/aurum-godot/src/a.rs"), Some(source.as_str())),
             (path("crates/aurum-godot/src/b.rs"), Some(source.as_str())),
             (path("crates/aurum-godot/src/c.rs"), Some(source.as_str())),
