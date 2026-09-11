@@ -118,6 +118,16 @@ impl State {
         self.values.insert(key.to_string(), value.into());
     }
 
+    /// Set a value under a runtime-owned key.
+    ///
+    /// [`State::set`] takes `&'static str` because the GDScript surface uses
+    /// compile-time keys. Callers that receive keys from outside the binary —
+    /// a save file, an editor, a tool protocol — must not `Box::leak` them, so
+    /// this variant takes ownership of the key instead.
+    pub fn set_owned<V: Into<StateValue>>(&mut self, key: impl Into<String>, value: V) {
+        self.values.insert(key.into(), value.into());
+    }
+
     pub fn get(&self, key: &str) -> Option<&StateValue> {
         self.values.get(key)
     }
@@ -198,6 +208,14 @@ mod tests {
         assert_eq!(s.get_int("score").unwrap(), 42);
         assert_eq!(s.get_string("name").unwrap(), "player");
         assert_eq!(s.get_bool("alive").unwrap(), true);
+    }
+
+    #[test]
+    fn set_owned_accepts_runtime_keys() {
+        let mut s = State::new();
+        let key = String::from("dynamic_key");
+        s.set_owned(key, 7i64);
+        assert_eq!(s.get_int("dynamic_key").unwrap(), 7);
     }
 
     #[test]

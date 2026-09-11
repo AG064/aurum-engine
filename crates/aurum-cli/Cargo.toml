@@ -9,5 +9,10 @@ description = "Aurum CLI module: command-line interface. Useful for tools, asset
 [lib]
 crate-type = ["rlib"]
 
+[[bin]]
+name = "aurum"
+path = "src/main.rs"
+
 [dependencies]
 aurum-core = { path = "../aurum-core" }
+aurum-mcp = { path = "../aurum-mcp" }

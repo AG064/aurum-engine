@@ -4,6 +4,12 @@ Status: draft for review, 2026-09-11
 Depends on: Phase 0 hot reload (`docs/HOT_RELOAD.md`), Aurum Studio design
 (`docs/superpowers/specs/2026-08-31-aurum-studio-design.md`)
 
+> **Implementation status.** M1 and M2 are implemented: `crates/aurum-mcp`
+> ships a zero-dependency headless server with 22 `aurum_*` tools over stdio,
+> driven by `aurum mcp`. See `crates/aurum-mcp/README.md`. The optional editor
+> integration (M3 onward) is not started — it is the only part that requires
+> the third-party toolkit.
+
 ## Summary
 
 The goal is that an AI model can control the Aurum engine the way Blender MCP

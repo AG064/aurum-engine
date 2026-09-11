@@ -37,6 +37,7 @@ impl TimeScale {
 }
 
 /// Tracks fixed-timestep accumulation. Default step is 1/60.
+#[derive(Debug, Clone)]
 pub struct FixedTimestep {
     step: f32,
     accumulator: f32,

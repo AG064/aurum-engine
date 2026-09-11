@@ -1,0 +1,21 @@
+[package]
+name = "aurum-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Aurum MCP server: drive the engine headlessly over the Model Context Protocol."
+
+[lib]
+crate-type = ["rlib"]
+
+[[bin]]
+name = "aurum-mcp"
+path = "src/main.rs"
+
+[dependencies]
+aurum-core = { path = "../aurum-core" }
+aurum-space = { path = "../aurum-space" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

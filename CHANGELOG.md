@@ -4,6 +4,41 @@ All notable changes to Aurum are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`aurum-mcp`** — headless Model Context Protocol server. Drives the engine
+  over newline-delimited JSON-RPC 2.0 on stdio with no Godot process, exposing
+  22 `aurum_*` tools across entities, components, events, state, time, the
+  space simulation, and save/load. Adds **no external dependencies**: only
+  `aurum-core`, `aurum-space`, and the already-locked `serde` stack.
+  - `--read-only` omits and refuses mutating tools.
+  - `--root` confines `aurum_save` / `aurum_load`, refusing `..` escapes and
+    re-checking existing paths through symlinks.
+  - Saves in the same JSON shape as `AurumNode.save_to_json`, so a session
+    round-trips between the headless and Godot surfaces.
+  - 65 tests, including full protocol sessions driven in memory.
+
+- **`aurum-core::dynamic`** — `DynamicWorld`, a scriptable string-keyed world
+  with JSON-blob components. The generically typed `ecs::World` cannot be
+  driven from a save file or an external tool; this is its counterpart, and
+  the model the Godot bridge already exposes.
+
+- **`aurum-core::state`** — `State::set_owned` accepts a runtime-owned key.
+  Callers receiving keys from outside the binary no longer have to
+  `Box::leak` them to satisfy `set`'s `&'static str` bound.
+
+- **`aurum-cli`** — the `aurum` binary, with `aurum mcp` delegating to
+  `aurum-mcp` so the two entry points cannot drift.
+
+### Documentation
+
+- `docs/superpowers/specs/2026-09-11-aurum-mcp-design.md` — the three-layer MCP
+  architecture, per-layer dependency accounting, and the phasing.
+- `crates/aurum-mcp/README.md` — usage, client configuration, and the tool
+  surface.
+
 ## [0.1.0] — 2026-07-28
 
 The first public release. Foundation only — no API stability promises yet.

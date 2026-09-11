@@ -25,6 +25,7 @@ name = "aurum-cli"
 version = "0.1.0"
 dependencies = [
  "aurum-core",
+ "aurum-mcp",
 ]
 
 [[package]]
@@ -44,6 +45,17 @@ dependencies = [
  "aurum-space",
  "aurum-vn",
  "godot",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "aurum-mcp"
+version = "0.1.0"
+dependencies = [
+ "aurum-core",
+ "aurum-space",
  "serde",
  "serde_json",
  "thiserror",

@@ -25,8 +25,11 @@ and scenes are unchanged — only the Rust crate boundary is slower.
 - **`aurum-vn`** — story interpreter with full GDScript shim
   (`Aurum.story_*`). Includes a minimal visual novel demo that ports
   the original `godot/vn/` story format onto the new engine.
-- **`aurum-vr`** / **`aurum-text`** / **`aurum-cli`** — stubs for
-  VR, text-only, and CLI tool genres.
+- **`aurum-mcp`** — headless MCP server. Lets an AI model drive the engine
+  with no Godot process: entities, components, events, state, the space
+  simulation, and save/load. Adds no external dependencies.
+- **`aurum-vr`** / **`aurum-text`** — stubs for VR and text-only genres.
+- **`aurum-cli`** — the `aurum` command line, providing `aurum mcp`.
 - **`godot/`** — Godot project with the add-on, a dev console,
   and two tutorial demos:
   - **2D squares** — movement + collision + score
