@@ -29,6 +29,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aurum-content"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aurum-core"
 version = "0.1.0"
 dependencies = [
