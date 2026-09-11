@@ -8,7 +8,7 @@
 #   pwsh scripts/build.ps1                       # release + copy DLL + tests
 #   pwsh scripts/build.ps1 -DebugBuild           # debug, skip tests
 #   pwsh scripts/build.ps1 -Run                  # build then run the demo
-#   pwsh scripts/build.ps1 -Run -Editor          # build then open editor
+#   pwsh scripts/build.ps1 -DebugBuild -RunEditor # debug build then open editor
 #   pwsh scripts/build.ps1 -NoTests              # skip tests
 #   pwsh scripts/build.ps1 -GodotProject <path> # custom Godot project
 #   pwsh scripts/build.ps1 -GodotBinary <path>  # custom Godot binary
@@ -26,6 +26,7 @@ param(
     [switch]$DebugBuild,
     [switch]$Run,
     [switch]$Editor,
+    [switch]$RunEditor,
     [switch]$NoTests,
     [string]$Workspace,
     [string]$GodotProject,
@@ -85,6 +86,192 @@ function Find-AurumGodot {
     return $null
 }
 
+function Install-AurumAddonSource {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceAddon,
+        [Parameter(Mandatory = $true)]
+        [string]$TargetAddon
+    )
+
+    $sourceRoot = [System.IO.Path]::GetFullPath($SourceAddon)
+    $targetRoot = [System.IO.Path]::GetFullPath($TargetAddon)
+    Get-ChildItem -LiteralPath $sourceRoot -Recurse -File -Force | ForEach-Object {
+        $relativePath = [System.IO.Path]::GetRelativePath($sourceRoot, $_.FullName)
+        if ($relativePath -match '^(bin[\\/]).*\.dll$') {
+            return
+        }
+        $destination = Join-Path $targetRoot $relativePath
+        $destinationDirectory = Split-Path $destination -Parent
+        if (-not (Test-Path -LiteralPath $destinationDirectory)) {
+            New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+        }
+        Copy-Item -LiteralPath $_.FullName -Destination $destination -Force
+    }
+}
+
+function Install-AurumDllTransaction {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DllSource,
+        [Parameter(Mandatory = $true)]
+        [string]$DllTarget,
+        [Parameter(Mandatory = $true)]
+        [string]$DllTargetName,
+        [Parameter(Mandatory = $true)]
+        [string]$Profile
+    )
+
+    $transactionId = [guid]::NewGuid().ToString("N")
+    $stagedTarget = "$DllTarget.stage.$transactionId"
+    $backupTarget = "$DllTarget.backup.$transactionId"
+    foreach ($transientPath in @($stagedTarget, $backupTarget)) {
+        if (Test-Path -LiteralPath $transientPath) {
+            throw "Transaction artifact already exists and will not be overwritten: $transientPath"
+        }
+    }
+
+    $sourceHash = $null
+    for ($stableAttempt = 0; $stableAttempt -lt 10; $stableAttempt++) {
+        $firstHash = (Get-FileHash -LiteralPath $DllSource -Algorithm SHA256).Hash
+        Start-Sleep -Milliseconds 250
+        $secondHash = (Get-FileHash -LiteralPath $DllSource -Algorithm SHA256).Hash
+        if ($firstHash -eq $secondHash) {
+            $sourceHash = $secondHash
+            break
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($sourceHash)) {
+        throw "$Profile DLL did not become stable: $DllSource"
+    }
+
+    $committed = $false
+    try {
+        for ($copyAttempt = 1; $copyAttempt -le 5; $copyAttempt++) {
+            try {
+                Copy-Item -LiteralPath $DllSource -Destination $stagedTarget -Force
+                $stagedHash = (Get-FileHash -LiteralPath $stagedTarget -Algorithm SHA256).Hash
+                if ($stagedHash -ne $sourceHash) {
+                    throw "Staged DLL hash does not match source: $stagedTarget"
+                }
+            } catch {
+                if ($copyAttempt -eq 5) {
+                    throw "Could not prepare $DllTargetName for atomic installation: $($_.Exception.Message)"
+                }
+                if (Test-Path -LiteralPath $stagedTarget) {
+                    Remove-Item -LiteralPath $stagedTarget -Force -ErrorAction SilentlyContinue
+                }
+                Start-Sleep -Milliseconds 250
+                continue
+            }
+
+            try {
+                if (Test-Path -LiteralPath $DllTarget) {
+                    [System.IO.File]::Replace($stagedTarget, $DllTarget, $backupTarget, $true)
+                } else {
+                    [System.IO.File]::Move($stagedTarget, $DllTarget)
+                }
+            } catch {
+                throw "Could not atomically install ${DllTargetName}: $($_.Exception.Message)"
+            }
+
+            $committed = $true
+            break
+        }
+
+        if (-not $committed) {
+            throw "DLL installation did not complete: $DllTarget"
+        }
+    } finally {
+        if (Test-Path -LiteralPath $stagedTarget) {
+            Remove-Item -LiteralPath $stagedTarget -Force -ErrorAction SilentlyContinue
+        }
+        if ($committed -and (Test-Path -LiteralPath $backupTarget)) {
+            Remove-Item -LiteralPath $backupTarget -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Write-Host "==> Installed $DllTargetName to $DllTarget" -ForegroundColor Green
+    return $sourceHash
+}
+
+function Resolve-AurumLaunchMode {
+    param(
+        [switch]$DebugBuild,
+        [switch]$Run,
+        [switch]$Editor,
+        [switch]$RunEditor
+    )
+
+    if ($RunEditor) {
+        $Run = $true
+        $Editor = $true
+    }
+    if ($Editor -and -not $DebugBuild) {
+        throw "Opening the editor requires -DebugBuild so aurum_godot.debug.dll is installed"
+    }
+    return [pscustomobject]@{
+        Run = [bool]$Run
+        Editor = [bool]$Editor
+    }
+}
+
+function Publish-AurumDebugReloadMarker {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectPath,
+        [Parameter(Mandatory = $true)]
+        [string]$VerifiedDllHash
+    )
+
+    if ($VerifiedDllHash -cnotmatch '^[0-9A-F]{64}$') {
+        throw "Verified debug DLL hash is not a SHA-256 value"
+    }
+
+    $projectRoot = [System.IO.Path]::GetFullPath($ProjectPath)
+    $markerDirectory = Join-Path $projectRoot ".godot\aurum"
+    $markerPath = Join-Path $markerDirectory "aurum_godot.debug.reload"
+    $stagedMarker = "$markerPath.stage.$([guid]::NewGuid().ToString('N'))"
+    try {
+        if (-not (Test-Path -LiteralPath $markerDirectory)) {
+            New-Item -ItemType Directory -Path $markerDirectory -Force | Out-Null
+        }
+        if (-not (Test-Path -LiteralPath $markerDirectory -PathType Container)) {
+            throw "Debug reload marker directory is not a directory: $markerDirectory"
+        }
+
+        $encoding = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText(
+            $stagedMarker,
+            "$VerifiedDllHash`n",
+            $encoding)
+        $stagedHash = (Get-Content -LiteralPath $stagedMarker -Raw).Trim()
+        if ($stagedHash -cne $VerifiedDllHash) {
+            throw "Staged debug reload marker did not preserve the verified DLL hash"
+        }
+        [System.IO.File]::Move($stagedMarker, $markerPath, $true)
+
+        $publishedHash = (Get-Content -LiteralPath $markerPath -Raw).Trim()
+        if ($publishedHash -cne $VerifiedDllHash) {
+            throw "Published debug reload marker did not preserve the verified DLL hash"
+        }
+    } finally {
+        if (Test-Path -LiteralPath $stagedMarker) {
+            Remove-Item -LiteralPath $stagedMarker -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Write-Host "==> Published Aurum debug reload marker $markerPath" -ForegroundColor Green
+}
+
+$launchMode = Resolve-AurumLaunchMode `
+    -DebugBuild:$DebugBuild `
+    -Run:$Run `
+    -Editor:$Editor `
+    -RunEditor:$RunEditor
+$Run = $launchMode.Run
+$Editor = $launchMode.Editor
+
 if (-not $Workspace) {
     $Workspace = Resolve-Path (Join-Path $PSScriptRoot "..")
 } else {
@@ -140,8 +327,10 @@ try {
 
 if ($DebugBuild) {
     $DllSource = Join-Path $Workspace "target\debug\aurum_godot.dll"
+    $DllTargetName = "aurum_godot.debug.dll"
 } else {
     $DllSource = Join-Path $Workspace "target\release\aurum_godot.dll"
+    $DllTargetName = "aurum_godot.dll"
 }
 
 if (-not (Test-Path $DllSource)) {
@@ -158,7 +347,7 @@ if ($SourceAddon.TrimEnd('\') -ne $TargetAddon.TrimEnd('\')) {
     if (-not (Test-Path $TargetAddon)) {
         New-Item -ItemType Directory -Path $TargetAddon -Force | Out-Null
     }
-    Copy-Item -Path (Join-Path $SourceAddon '*') -Destination $TargetAddon -Recurse -Force
+    Install-AurumAddonSource -SourceAddon $SourceAddon -TargetAddon $TargetAddon
     $SourceRuntime = Join-Path $Workspace "godot\scripts\aurum_runtime.gd"
     $TargetRuntime = Join-Path $TargetAddon "scripts\aurum_runtime.gd"
     Copy-Item -Path $SourceRuntime -Destination $TargetRuntime -Force
@@ -168,33 +357,24 @@ if ($SourceAddon.TrimEnd('\') -ne $TargetAddon.TrimEnd('\')) {
 # Copy the native binary after installing the source tree. The source add-on
 # also contains a reference binary, so copying in the other order can replace
 # the freshly built DLL with a stale one.
-$DllTarget = Join-Path $AddOnBin "aurum_godot.dll"
-$dll_verified = $false
-for ($copy_attempt = 0; $copy_attempt -lt 5; $copy_attempt++) {
-    $source_hash = $null
-    for ($stable_attempt = 0; $stable_attempt -lt 10; $stable_attempt++) {
-        $first_hash = (Get-FileHash -Path $DllSource -Algorithm SHA256).Hash
-        Start-Sleep -Milliseconds 250
-        $second_hash = (Get-FileHash -Path $DllSource -Algorithm SHA256).Hash
-        if ($first_hash -eq $second_hash) {
-            $source_hash = $second_hash
-            break
-        }
-    }
-    if ([string]::IsNullOrWhiteSpace($source_hash)) {
-        throw "Release DLL did not become stable: $DllSource"
-    }
-    Copy-Item -Path $DllSource -Destination $DllTarget -Force
-    $target_hash = (Get-FileHash -Path $DllTarget -Algorithm SHA256).Hash
-    if ($source_hash -eq $target_hash) {
-        $dll_verified = $true
-        break
+$DllTarget = Join-Path $AddOnBin $DllTargetName
+$installedDllHash = Install-AurumDllTransaction `
+    -DllSource $DllSource `
+    -DllTarget $DllTarget `
+    -DllTargetName $DllTargetName `
+    -Profile $Profile
+if ($DebugBuild) {
+    try {
+        Publish-AurumDebugReloadMarker `
+            -ProjectPath $GodotProject `
+            -VerifiedDllHash $installedDllHash
+    } catch {
+        Write-Warning (
+            "The debug DLL was installed and verified, but its reload marker " +
+            "could not be published: $($_.Exception.Message). " +
+            "Save editor work and use a controlled editor restart if needed.")
     }
 }
-if (-not $dll_verified) {
-    throw "Copied DLL hash does not match source: $DllSource"
-}
-Write-Host "==> Copied aurum_godot.dll to $DllTarget" -ForegroundColor Green
 
 # ---------- 2. Tests ----------
 

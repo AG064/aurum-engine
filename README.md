@@ -42,7 +42,7 @@ pwsh scripts/build.ps1
 pwsh scripts/build.ps1 -Run
 
 # 3. Open the Godot editor
-pwsh scripts/build.ps1 -Run -Editor
+pwsh scripts/build.ps1 -DebugBuild -RunEditor
 ```
 
 The build script defaults to the Godot project at `./godot/`. To use a
@@ -65,7 +65,7 @@ aurum-engine/                  # Cargo workspace root
 │   └── aurum-cli/             # CLI tools (stub)
 ├── scripts/
 │   ├── build.ps1              # build + copy DLL + (optional) run
-│   └── dev.ps1                # cargo-watch + auto-rebuild
+│   └── dev.ps1                # self-contained debug watcher
 ├── .vscode/tasks.json         # VS Code task definitions
 ├── .github/workflows/ci.yml   # GitHub Actions CI
 ├── docs/
@@ -134,16 +134,19 @@ aurum-engine/                  # Cargo workspace root
 
 ## Hot-reload story
 
-| Layer                              | Reload time | How                         |
-|------------------------------------|-------------|-----------------------------|
-| GDScript                          | <100ms      | Godot already does this     |
-| `.tscn` scenes                    | <100ms      | Godot already does this     |
-| Rust engine (`aurum-godot`)       | 5–15s       | `cargo build`, next launch  |
-| Rust modules (optional in editor) | 5–15s       | Same                        |
+| Layer                              | Normal feedback | How                                      |
+|------------------------------------|-----------------|------------------------------------------|
+| GDScript                           | Immediate       | Godot reloads scripts                    |
+| `.tscn` scenes and resources       | Immediate       | Godot reloads editor resources           |
+| Safe Rust implementation changes   | Debug build     | Reloadable GDExtension, same editor PID  |
+| Native Godot API structure changes | Controlled      | Exceptional editor restart               |
 
-For 95% of iteration (gameplay tweaks, UI changes, scene layout) you
-stay in the Godot editor with sub-100ms feedback. Rust rebuilds are
-rare because engine code stabilizes after the first version.
+Run `pwsh scripts/dev.ps1` for the self-contained debug watcher. It does not
+require `cargo-watch`. After a verified debug DLL install, the watcher publishes
+its hash and the enabled Aurum editor plugin performs the checked native reload.
+A failed build keeps the last working DLL. A rejected native reload warns that a
+controlled editor restart may be required. See `docs/HOT_RELOAD.md` for the
+tested boundary and live product-path evidence.
 
 ## Naming
 

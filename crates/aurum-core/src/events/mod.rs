@@ -1,7 +1,7 @@
 //! Typed event bus.
 //!
 //! Events are values sent through the bus. Subscribers receive by type. The
-//! bus is a queue — events emitted this tick are not delivered to subscribers
+//! bus is a queue. Events emitted this tick are not delivered to subscribers
 //! registered after the emit (or to subscribers registered during the emit
 //! loop). After the tick, queued events are swapped into the "current" set
 //! for delivery.
@@ -68,8 +68,7 @@ impl EventBus {
     pub fn unsubscribe(&mut self, id: SubscriberId) -> bool {
         for list in self.subscribers.values_mut() {
             if let Some(pos) = list.iter().position(|(sid, _)| *sid == id) {
-                list.remove(pos);
-                let _ = id;
+                let _removed = list.remove(pos);
                 return true;
             }
         }
@@ -84,7 +83,7 @@ impl EventBus {
     /// Drain the queue, delivering each event to its subscribers.
     ///
     /// Subscribers added during dispatch do NOT receive the current event
-    /// (intentional — avoids reentrancy bugs).
+    /// This is intentional and avoids reentrancy bugs.
     pub fn dispatch(&mut self) {
         // Move the queue out so subscribers can emit new events without
         // borrowing `self` recursively.

@@ -8,7 +8,6 @@ starting your own project on top of Aurum.
 - Rust 1.75 or later (`rustup default stable`).
 - Godot 4.7 (download from [godotengine.org](https://godotengine.org/download/)).
 - PowerShell (Windows).
-- `cargo-watch` for the dev script: `cargo install cargo-watch`.
 
 ## Clone and build
 
@@ -34,7 +33,7 @@ Godot binary at a non-default path, pass `-GodotBinary <path>`.
 ## Open the project in the Godot editor
 
 ```pwsh
-pwsh scripts/build.ps1 -Run -Editor
+pwsh scripts/build.ps1 -DebugBuild -RunEditor
 ```
 
 The editor will open with the project at `godot/`. The `AurumNode` class
@@ -53,20 +52,25 @@ This runs all Rust tests across all crates. As of v0.1.0, that's
 ~26 tests covering the ECS, event bus, state, time, 2D module, 3D
 module, and VN story parser.
 
-## Develop with hot-reload
+## Develop without routine editor restarts
 
-In one terminal, run the dev script:
+Run the self-contained watcher:
 
 ```pwsh
-pwsh scripts/dev.ps1
+pwsh scripts/dev.ps1 -RunEditor
 ```
 
-This watches `crates/` and rebuilds on any change, copying the new
-DLL into the Godot project.
+The watcher uses debug builds and installs `aurum_godot.debug.dll`. GDScript,
+scene, resource, shader, and safe Rust implementation changes keep the editor
+process alive. A running game may restart independently.
 
-In another terminal (or the editor itself), run the demo. GDScript
-and scene changes hot-reload in <100ms (built into Godot). Rust
-changes require a 5–15s rebuild and the next launch picks them up.
+Each verified debug install publishes its DLL hash under `.godot/aurum/`. The
+enabled Aurum editor plugin observes that marker, requires one loaded Aurum
+manifest, and accepts the native reload only when Godot returns `OK`.
+
+Native class registration, inheritance, exported method or signal signatures,
+entry symbols, and Godot API-version changes may require a controlled editor
+restart. See `docs/HOT_RELOAD.md` for the exact tested boundary.
 
 ## Create your own game
 
@@ -79,11 +83,15 @@ changes require a 5–15s rebuild and the next launch picks them up.
 
 ## Common pitfalls
 
-- **"AurumNode class not found"** — the GDExtension DLL is not at
-  `godot/addons/aurum/bin/aurum_godot.dll`. Re-run
-  `pwsh scripts/build.ps1`.
-- **"DLL changed on disk"** — Godot locks the DLL while the editor is
-  open. Close the editor, run the build, then re-open.
+- **"AurumNode class not found"**: run `pwsh scripts/dev.ps1 -Once` and verify
+  that `addons/aurum/bin/aurum_godot.debug.dll` exists.
+- **DLL installation failed before commit**: the last working DLL remains
+  installed. Close programs that independently locked the staged file, then let
+  the watcher retry.
+- **Native reload warning**: save editor work and use the controlled restart
+  path. The plugin suppresses repeated attempts for the same failed DLL hash.
+- **Native structure changed**: save editor work and use the controlled restart
+  path. Do not treat this exceptional case as the normal development loop.
 - **Component shape mismatches** — if Rust expects `{x, y, z}` and
   GDScript passes `{x, y}`, the JSON conversion silently drops fields.
   Always match field names exactly.

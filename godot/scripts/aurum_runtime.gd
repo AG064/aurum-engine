@@ -1,8 +1,8 @@
 extends Node
 
-# Aurum runtime — autoloaded as `Aurum`.
+# Aurum runtime, autoloaded as `Aurum`.
 #
-# The single GDScript-facing entry point. Wraps the `Mavis` GDExtension
+# The single GDScript-facing entry point. Wraps the `AurumNode` GDExtension
 # node (which is the actual engine) and exposes a friendly API:
 #
 #   Aurum.spawn()
@@ -16,10 +16,10 @@ extends Node
 # - The dev console can hook into one place.
 # - Module registration has a clear call site.
 #
-# The native Mavis class is loaded dynamically via ClassDB so the
+# The native AurumNode class is loaded dynamically via ClassDB so the
 # autoload can fail gracefully if the GDExtension DLL is missing.
 
-const ENGINE_CLASS := "Mavis"
+const ENGINE_CLASS := "AurumNode"
 
 var _engine: Node = null
 
@@ -27,7 +27,7 @@ var _engine: Node = null
 func _ready() -> void:
 	_engine = _instantiate_engine()
 	if _engine == null:
-		push_error("[Aurum] Could not instantiate Mavis. Did you build the GDExtension? Run: pwsh scripts/build.ps1")
+		push_error("[Aurum] Could not instantiate AurumNode. Build the GDExtension with: pwsh build.ps1")
 		return
 	if _engine is Node:
 		add_child(_engine as Node)
@@ -39,10 +39,18 @@ func _instantiate_engine() -> Node:
 	# Try ClassDB first (more reliable than singleton lookup in editor).
 	if ClassDB.can_instantiate(ENGINE_CLASS):
 		return ClassDB.instantiate(ENGINE_CLASS)
-	# Fallback: search for a singleton named Mavis.
+	# Fallback: search for a singleton named AurumNode.
 	if Engine.has_singleton(ENGINE_CLASS):
 		return Engine.get_singleton(ENGINE_CLASS)
 	return null
+
+
+# ===== Build diagnostics =====
+
+func runtime_fingerprint() -> String:
+	if _engine == null:
+		return ""
+	return _engine.runtime_fingerprint()
 
 
 # ===== Module registration =====
@@ -187,7 +195,12 @@ func get_entities_with_all(type_names: Array) -> Array:
 # ===== Event API =====
 
 func emit_event(type_name: String, data: Dictionary = {}) -> void:
-	_engine.emit_event(type_name, data)
+	if _engine == null:
+		return
+	var typed: Dictionary[String, Variant] = {}
+	for key in data.keys():
+		typed[String(key)] = data[key]
+	_engine.emit_event(type_name, typed)
 
 
 func dispatch_events() -> void:
@@ -224,6 +237,143 @@ func set_time_scale(scale: float) -> void:
 
 func get_time_scale() -> float:
 	return _engine.get_time_scale()
+
+
+# ===== Space simulation =====
+
+func space_configure(
+	mass_kg: float,
+	thrust_n: float,
+	rotation_accel_rad_s2: float,
+	max_rotation_rate_rad_s: float,
+	max_speed_mps: float,
+	boost_multiplier: float,
+	boost_fuel_per_s: float,
+	boost_heat_per_s: float,
+	fuel_capacity: float,
+	heat_capacity: float,
+	heat_dissipation_per_s: float,
+	shield_capacity: float,
+	hull_capacity: float,
+	flight_assist_damping: float,
+) -> bool:
+	if _engine == null:
+		return false
+	return _engine.space_configure(
+		mass_kg,
+		thrust_n,
+		rotation_accel_rad_s2,
+		max_rotation_rate_rad_s,
+		max_speed_mps,
+		boost_multiplier,
+		boost_fuel_per_s,
+		boost_heat_per_s,
+		fuel_capacity,
+		heat_capacity,
+		heat_dissipation_per_s,
+		shield_capacity,
+		hull_capacity,
+		flight_assist_damping,
+	)
+
+
+func space_reset() -> void:
+	if _engine != null:
+		_engine.space_reset()
+
+
+func space_set_docked(docked: bool) -> void:
+	if _engine != null:
+		_engine.space_set_docked(docked)
+
+
+func space_set_transform(
+	position_x: float,
+	position_y: float,
+	position_z: float,
+	orientation_x: float,
+	orientation_y: float,
+	orientation_z: float,
+	orientation_w: float,
+) -> void:
+	if _engine != null:
+		_engine.space_set_transform(
+			position_x,
+			position_y,
+			position_z,
+			orientation_x,
+			orientation_y,
+			orientation_z,
+			orientation_w,
+		)
+
+
+func space_set_status(fuel: float, heat: float, shield: float, hull: float) -> void:
+	if _engine != null:
+		_engine.space_set_status(fuel, heat, shield, hull)
+
+
+func space_consume_fuel(amount: float) -> bool:
+	if _engine == null:
+		return false
+	return _engine.space_consume_fuel(amount)
+
+
+func space_stop_motion() -> void:
+	if _engine != null:
+		_engine.space_stop_motion()
+
+
+func space_set_input(
+	pitch: float,
+	yaw: float,
+	roll: float,
+	thrust_forward: float,
+	thrust_lateral: float,
+	thrust_vertical: float,
+	boost: bool,
+	dampen: bool,
+	flight_assist: bool,
+) -> void:
+	if _engine != null:
+		_engine.space_set_input(
+			pitch,
+			yaw,
+			roll,
+			thrust_forward,
+			thrust_lateral,
+			thrust_vertical,
+			boost,
+			dampen,
+			flight_assist,
+		)
+
+
+func space_step(real_delta: float) -> Dictionary:
+	if _engine == null:
+		return {}
+	return _engine.space_step(real_delta)
+
+
+func space_snapshot() -> Dictionary:
+	if _engine == null:
+		return {}
+	return _engine.space_snapshot()
+
+
+func space_apply_damage(amount: float) -> void:
+	if _engine != null:
+		_engine.space_apply_damage(amount)
+
+
+func space_repair_full() -> void:
+	if _engine != null:
+		_engine.space_repair_full()
+
+
+func space_refuel_full() -> void:
+	if _engine != null:
+		_engine.space_refuel_full()
 
 
 # ===== Save / Load =====

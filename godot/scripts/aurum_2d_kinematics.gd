@@ -1,6 +1,6 @@
 extends Node
 
-# Aurum2DKinematics — 2D movement system.
+# Aurum2DKinematics: 2D movement system.
 #
 # Reads `Velocity2D` components, integrates position over time, and writes
 # back to `Position2D` components. Then mirrors the change to scene nodes

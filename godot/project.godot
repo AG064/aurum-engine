@@ -1,10 +1,10 @@
 ; Engine configuration file.
-; Aurum — modular game engine foundation built on Godot 4.7.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
 ;
-; This project hosts the engine add-on plus two tutorial demos:
-; 2D squares (movement + collision + score) and 3D bounce (gravity
-; + jumping). Game projects that build on Aurum live in separate
-; repositories (see README.md for the full architecture diagram).
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
 
 config_version=5
 
@@ -18,6 +18,7 @@ config/features=PackedStringArray("4.7", "Forward Plus")
 [autoload]
 
 Aurum="*res://scripts/aurum_runtime.gd"
+MCPRuntimeServer="*res://addons/godot_mcp_toolkit/runtime/mcp_runtime_server.gd"
 
 [display]
 
@@ -28,11 +29,15 @@ window/stretch/aspect="expand"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/aurum/plugin.cfg")
+enabled=PackedStringArray("res://addons/aurum/plugin.cfg", "res://addons/godot_mcp_toolkit/plugin.cfg")
 
 [gui]
 
 theme/default_font_multichannel_signed_distance_field=true
+
+[mcp_toolkit]
+
+status="No .mcp.json found — use Project > Tools > MCP Toolkit > Write .mcp.json to create one."
 
 [physics]
 
@@ -40,9 +45,8 @@ theme/default_font_multichannel_signed_distance_field=true
 
 [rendering]
 
+rendering_device/driver.windows="d3d12"
+renderer/rendering_method.mobile="forward_plus"
 textures/vram_compression/import_etc2_astc=true
 anti_aliasing/quality/msaa_3d=3
 environment/defaults/default_clear_color=Color(0, 0, 0.05, 1)
-rendering_device/driver.windows="d3d12"
-renderer/rendering_method="forward_plus"
-renderer/rendering_method.mobile="forward_plus"

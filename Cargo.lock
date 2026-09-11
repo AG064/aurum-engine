@@ -41,11 +41,20 @@ name = "aurum-godot"
 version = "0.1.0"
 dependencies = [
  "aurum-core",
+ "aurum-space",
  "aurum-vn",
  "godot",
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "aurum-space"
+version = "0.1.0"
+dependencies = [
+ "aurum-core",
+ "serde",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 extends Node2D
 class_name AurumEntity
 
-# AurumEntity — a 2D entity that mirrors a Rust-side engine entity.
+# AurumEntity: a 2D entity that mirrors a Rust-side engine entity.
 #
 # When the scene is created, `_ready` calls `Aurum.spawn()` and stores the
 # resulting entity id. Every change to position/velocity/components is

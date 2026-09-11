@@ -5,6 +5,7 @@ members = [
     "crates/aurum-godot",
     "crates/aurum-2d",
     "crates/aurum-3d",
+    "crates/aurum-space",
     "crates/aurum-vn",
     "crates/aurum-vr",
     "crates/aurum-text",

@@ -1,18 +1,18 @@
-//! Aurum Godot shim — the GDExtension surface that GDScript sees.
+//! Aurum Godot shim for the GDExtension surface that GDScript sees.
 //!
-//! This crate exposes a single `Mavis` Node class to Godot. It owns:
+//! This crate exposes a single `AurumNode` Node class to Godot. It owns:
 //!
 //! - A `World` (typed Rust ECS) for Rust-side systems.
 //! - A dynamic, JSON-blob component store for GDScript-authored entities.
 //! - A `State` for typed global values with save/load.
-//! - A typed `EventBus` that bridges to Godot signals.
+//! - A FIFO dynamic event queue that bridges to Godot signals.
 //!
 //! GDScript uses the dynamic store (string-keyed components). Rust systems
-//! can use the typed `World` directly. The two are independent — GDScript
+//! can use the typed `World` directly. The two are independent. GDScript
 //! doesn't have to know about Rust types, and Rust code doesn't have to
 //! know about GDScript-defined components.
 //!
-//! ## GDScript API (Mavis node)
+//! ## GDScript API (AurumNode node)
 //!
 //! ```gdscript
 //! # Entities
@@ -41,15 +41,16 @@
 //! ```
 
 mod bridge;
+mod build_info;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use godot::classes::Node;
 use godot::init::{ExtensionLibrary, InitLevel, gdextension};
 use godot::prelude::*;
 
 use aurum_core::ecs::World;
-use aurum_core::events::EventBus;
+use aurum_space::{FlightConfig, FlightInput, SpaceClock, SpaceSimulation, SpaceSnapshot};
 use aurum_core::state::{State, StateValue};
 use aurum_vn::{Event as StoryEvent, Interpreter, Story, VarValue};
 
@@ -65,10 +66,13 @@ unsafe impl ExtensionLibrary for AurumExtension {
     }
 }
 
-/// The single Godot-facing class. Registered as `Mavis`.
+/// The single Godot-facing class. Registered as `AurumNode`.
+///
+/// Editor lifecycle callbacks must remain side-effect free. Any future
+/// runtime-only side effect must explicitly guard against editor execution.
 #[derive(GodotClass)]
-#[class(base=Node, rename=Mavis)]
-pub struct Mavis {
+#[class(base=Node, rename=AurumNode, tool)]
+pub struct AurumNode {
     base: Base<Node>,
     /// Typed Rust ECS (for Rust-side systems; optional for GDScript).
     pub(crate) world: World,
@@ -78,8 +82,12 @@ pub struct Mavis {
     pub(crate) by_type: HashMap<String, HashSet<i64>>,
     /// Next entity id to assign.
     pub(crate) next_entity_id: i64,
-    /// Typed event bus.
-    pub(crate) events: EventBus,
+    /// FIFO queue for dynamic events emitted by GDScript.
+    pub(crate) event_queue: VecDeque<DynamicEvent>,
+    /// Typed space simulation. Games mirror snapshots into presentation nodes.
+    pub(crate) space: SpaceSimulation,
+    /// Fixed clock for the typed space simulation.
+    pub(crate) space_clock: SpaceClock,
     /// Typed global state.
     pub(crate) state: State,
     /// Time scale (1.0 = normal).
@@ -91,7 +99,7 @@ pub struct Mavis {
 }
 
 #[godot_api]
-impl INode for Mavis {
+impl INode for AurumNode {
     fn init(base: Base<Node>) -> Self {
         Self {
             base,
@@ -99,7 +107,9 @@ impl INode for Mavis {
             components: HashMap::new(),
             by_type: HashMap::new(),
             next_entity_id: 1,
-            events: EventBus::new(),
+            event_queue: VecDeque::new(),
+            space: SpaceSimulation::default(),
+            space_clock: SpaceClock::default(),
             state: State::new(),
             time_scale: 1.0,
             modules: Vec::new(),
@@ -109,7 +119,7 @@ impl INode for Mavis {
 }
 
 #[godot_api]
-impl Mavis {
+impl AurumNode {
     // ===== Signal =====
     //
     // Fired by `dispatch_events`. The first argument is the event type
@@ -263,11 +273,15 @@ impl Mavis {
 
     /// Queue an event. It will be delivered on the next `dispatch_events` call.
     #[func]
-    fn emit_event(&mut self, type_name: String, data: Dictionary<GString, Variant>) {
-        let json = variant_to_json(&data.to_variant());
-        self.events.emit(DynamicEvent {
+    fn emit_event(&mut self, type_name: String, data: Variant) {
+        let json = variant_to_json(&data);
+        let object = match json {
+            serde_json::Value::Object(_) => json,
+            _ => serde_json::Value::Object(serde_json::Map::new()),
+        };
+        self.event_queue.push_back(DynamicEvent {
             type_name,
-            data: json,
+            data: object,
         });
     }
 
@@ -275,8 +289,14 @@ impl Mavis {
     /// Godot signal with `(type_name, data)`.
     #[func]
     fn dispatch_events(&mut self) {
-        while self.events.pending() > 0 {
-            self.flush_one_event();
+        while let Some(event) = self.event_queue.pop_front() {
+            let dict = json_to_variant(&event.data)
+                .try_to::<Dictionary<GString, Variant>>()
+                .unwrap_or_default();
+            self.base_mut().emit_signal(
+                "event_received",
+                &[event.type_name.to_variant(), dict.to_variant()],
+            );
         }
     }
 
@@ -336,6 +356,163 @@ impl Mavis {
         self.time_scale
     }
 
+    // ===== Space simulation =====
+
+    /// Configure the reusable Aurum 6DOF flight model for the active ship.
+    #[func]
+    fn space_configure(
+        &mut self,
+        mass_kg: f32,
+        thrust_n: f32,
+        rotation_accel_rad_s2: f32,
+        max_rotation_rate_rad_s: f32,
+        max_speed_mps: f32,
+        boost_multiplier: f32,
+        boost_fuel_per_s: f32,
+        boost_heat_per_s: f32,
+        fuel_capacity: f32,
+        heat_capacity: f32,
+        heat_dissipation_per_s: f32,
+        shield_capacity: f32,
+        hull_capacity: f32,
+        flight_assist_damping: f32,
+    ) -> bool {
+        self.space.configure(FlightConfig {
+            mass_kg,
+            thrust_n,
+            rotation_accel_rad_s2,
+            max_rotation_rate_rad_s,
+            max_speed_mps,
+            boost_multiplier,
+            boost_fuel_per_s,
+            boost_heat_per_s,
+            fuel_capacity,
+            heat_capacity,
+            heat_dissipation_per_s,
+            shield_capacity,
+            hull_capacity,
+            flight_assist_damping,
+            dampen_strength: (flight_assist_damping * 6.0).max(4.0),
+            ..FlightConfig::default()
+        });
+        true
+    }
+
+    /// Reset the active space simulation to its configured ship state.
+    #[func]
+    fn space_reset(&mut self) {
+        self.space.reset();
+        self.space_clock.reset();
+    }
+
+    /// Set whether the ship is docked. Docked ships do not integrate flight.
+    #[func]
+    fn space_set_docked(&mut self, docked: bool) {
+        self.space.set_docked(docked);
+    }
+
+    /// Place the authoritative ship transform from a presentation or load
+    /// boundary. Normal flight then owns subsequent transform changes.
+    #[func]
+    fn space_set_transform(
+        &mut self,
+        position_x: f32,
+        position_y: f32,
+        position_z: f32,
+        orientation_x: f32,
+        orientation_y: f32,
+        orientation_z: f32,
+        orientation_w: f32,
+    ) {
+        self.space.set_transform(
+            aurum_space::Vec3::new(position_x, position_y, position_z),
+            aurum_space::Quat {
+                x: orientation_x,
+                y: orientation_y,
+                z: orientation_z,
+                w: orientation_w,
+            },
+        );
+    }
+
+    /// Set persistent ship status at a game load or service boundary.
+    #[func]
+    fn space_set_status(&mut self, fuel: f32, heat: f32, shield: f32, hull: f32) {
+        self.space.set_status(fuel, heat, shield, hull);
+    }
+
+    /// Consume fuel through the authoritative space state.
+    #[func]
+    fn space_consume_fuel(&mut self, amount: f32) -> bool {
+        self.space.consume_fuel(amount)
+    }
+
+    /// Stop linear and angular motion at a travel or respawn boundary.
+    #[func]
+    fn space_stop_motion(&mut self) {
+        self.space.stop_motion();
+    }
+
+    /// Submit normalized control input. The values are consumed by the next
+    /// fixed simulation ticks.
+    #[func]
+    fn space_set_input(
+        &mut self,
+        pitch: f32,
+        yaw: f32,
+        roll: f32,
+        thrust_forward: f32,
+        thrust_lateral: f32,
+        thrust_vertical: f32,
+        boost: bool,
+        dampen: bool,
+        flight_assist: bool,
+    ) {
+        self.space.set_input(FlightInput {
+            pitch,
+            yaw,
+            roll,
+            thrust_forward,
+            thrust_lateral,
+            thrust_vertical,
+            boost,
+            dampen,
+            flight_assist,
+        });
+    }
+
+    /// Advance the space simulation using a real frame delta. Internally the
+    /// simulation runs at Aurum's fixed physics rate.
+    #[func]
+    fn space_step(&mut self, real_delta: f32) -> Dictionary<GString, Variant> {
+        self.space_clock.advance(real_delta.max(0.0), &mut self.space);
+        space_snapshot_dict(self.space.snapshot())
+    }
+
+    /// Return the latest typed space snapshot for presentation and telemetry.
+    #[func]
+    fn space_snapshot(&self) -> Dictionary<GString, Variant> {
+        space_snapshot_dict(self.space.snapshot())
+    }
+
+    /// Apply damage through the authoritative space state.
+    #[func]
+    fn space_apply_damage(&mut self, amount: f32) {
+        self.space.apply_damage(amount);
+    }
+
+    /// Restore heat, shields, and hull to configured values.
+    #[func]
+    fn space_repair_full(&mut self) {
+        self.space.repair_full();
+    }
+
+    /// Restore fuel to the configured capacity.
+    #[func]
+    fn space_refuel_full(&mut self) {
+        self.space.refuel_full();
+    }
+
     // ===== Save / Load =====
 
     /// Serialize the engine state to JSON. Includes state, components,
@@ -348,6 +525,7 @@ impl Mavis {
             "time_scale": self.time_scale,
             "state": state_to_json(&self.state),
             "components": components_to_json(&self.components),
+            "space": serde_json::to_value(&self.space).unwrap_or(serde_json::Value::Null),
         });
         let s: String = serde_json::to_string(&payload).unwrap_or_default();
         GString::from(s.as_str())
@@ -392,7 +570,22 @@ impl Mavis {
                 }
             }
         }
+        if let Some(space) = obj.get("space") {
+            self.space = match serde_json::from_value(space.clone()) {
+                Ok(simulation) => simulation,
+                Err(_) => return false,
+            };
+            self.space_clock.reset();
+        }
         true
+    }
+
+    // ===== Build diagnostics =====
+
+    /// Return the compile-time identifier of the loaded development runtime.
+    #[func]
+    fn runtime_fingerprint(&self) -> GString {
+        GString::from(build_info::runtime_fingerprint())
     }
 
     // ===== Modules =====
@@ -649,32 +842,6 @@ pub(crate) struct DynamicEvent {
     pub(crate) data: serde_json::Value,
 }
 
-impl Mavis {
-    /// Internal: drain one event from the bus, fire the Godot signal.
-    fn flush_one_event(&mut self) -> bool {
-        use std::sync::{Arc, Mutex};
-        let captured: Arc<Mutex<Option<DynamicEvent>>> = Arc::new(Mutex::new(None));
-        let captured_clone = captured.clone();
-        let _sub_id = self.events.subscribe::<DynamicEvent, _>(move |e| {
-            *captured_clone.lock().unwrap() = Some(DynamicEvent {
-                type_name: e.type_name.clone(),
-                data: e.data.clone(),
-            });
-        });
-        self.events.dispatch();
-        let event = match captured.lock().unwrap().take() {
-            Some(e) => e,
-            None => return false,
-        };
-        let dict = json_to_variant(&event.data)
-            .try_to::<Dictionary<GString, Variant>>()
-            .unwrap_or_default();
-        self.base_mut()
-            .emit_signal("event_received", &[event.type_name.to_variant(), dict.to_variant()]);
-        true
-    }
-}
-
 fn state_value_to_variant(v: &StateValue) -> Variant {
     match v {
         StateValue::Bool(b) => b.to_variant(),
@@ -719,7 +886,44 @@ fn components_to_json(
     serde_json::Value::Object(out)
 }
 
-// Story event helpers — build Dictionary payloads for `story_advance`.
+fn space_snapshot_dict(snapshot: SpaceSnapshot) -> Dictionary<GString, Variant> {
+    let mut out = Dictionary::<GString, Variant>::new();
+    set_space_value(&mut out, "sector_x", snapshot.sector.x.to_variant());
+    set_space_value(&mut out, "sector_y", snapshot.sector.y.to_variant());
+    set_space_value(&mut out, "sector_z", snapshot.sector.z.to_variant());
+    set_space_value(&mut out, "position_x", snapshot.local_position.x.to_variant());
+    set_space_value(&mut out, "position_y", snapshot.local_position.y.to_variant());
+    set_space_value(&mut out, "position_z", snapshot.local_position.z.to_variant());
+    set_space_value(&mut out, "orientation_x", snapshot.orientation.x.to_variant());
+    set_space_value(&mut out, "orientation_y", snapshot.orientation.y.to_variant());
+    set_space_value(&mut out, "orientation_z", snapshot.orientation.z.to_variant());
+    set_space_value(&mut out, "orientation_w", snapshot.orientation.w.to_variant());
+    set_space_value(&mut out, "velocity_x", snapshot.velocity.x.to_variant());
+    set_space_value(&mut out, "velocity_y", snapshot.velocity.y.to_variant());
+    set_space_value(&mut out, "velocity_z", snapshot.velocity.z.to_variant());
+    set_space_value(&mut out, "angular_velocity_x", snapshot.angular_velocity.x.to_variant());
+    set_space_value(&mut out, "angular_velocity_y", snapshot.angular_velocity.y.to_variant());
+    set_space_value(&mut out, "angular_velocity_z", snapshot.angular_velocity.z.to_variant());
+    set_space_value(&mut out, "fuel", snapshot.fuel.to_variant());
+    set_space_value(&mut out, "heat", snapshot.heat.to_variant());
+    set_space_value(&mut out, "shield", snapshot.shield.to_variant());
+    set_space_value(&mut out, "hull", snapshot.hull.to_variant());
+    set_space_value(&mut out, "boost_active", snapshot.boost_active.to_variant());
+    set_space_value(&mut out, "docked", snapshot.docked.to_variant());
+    set_space_value(&mut out, "tick", (snapshot.tick as i64).to_variant());
+    out
+}
+
+fn set_space_value(
+    dictionary: &mut Dictionary<GString, Variant>,
+    key: &str,
+    value: Variant,
+) {
+    let key = GString::from(key);
+    dictionary.set(&key, &value);
+}
+
+// Story event helpers build Dictionary payloads for `story_advance`.
 
 fn story_event_dict(type_name: &str, extras: &[(&str, Variant)]) -> Dictionary<GString, Variant> {
     let mut pairs: Vec<(&str, Variant)> =

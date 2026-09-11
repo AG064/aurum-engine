@@ -1,16 +1,13 @@
-# Aurum dev script — continuous rebuild on Rust file changes.
+# Aurum development script using PowerShell polling, debug builds, and in-editor reload.
 #
-# Watches the `crates/` directory and rebuilds the GDExtension on any
-# change. After each successful build, copies the DLL into the Godot
-# add-on bin. You can run Godot in another window — the GDScript side
-# picks up the new DLL on the next launch.
-#
-# This requires `cargo-watch`:
-#   cargo install cargo-watch
+# Watches Rust and Cargo inputs, then rebuilds the GDExtension after a stable
+# debounce window. Each successful build installs the debug DLL through the
+# transactional installer in build.ps1.
 #
 # Usage:
 #   pwsh scripts/dev.ps1
 #   pwsh scripts/dev.ps1 -RunEditor
+#   pwsh scripts/dev.ps1 -Once
 #   pwsh scripts/dev.ps1 -GodotProject <path>
 #   pwsh scripts/dev.ps1 -GodotBinary <path>
 #
@@ -24,6 +21,11 @@
 [CmdletBinding()]
 param(
     [switch]$RunEditor,
+    [switch]$Once,
+    [ValidateRange(100, 5000)]
+    [int]$PollMilliseconds = 250,
+    [ValidateRange(100, 10000)]
+    [int]$DebounceMilliseconds = 350,
     [string]$GodotProject,
     [string]$GodotBinary
 )
@@ -70,15 +72,67 @@ function Find-AurumGodot {
         }
     }
 
-    foreach ($c in $candidates) {
-        if ($c -and (Test-Path $c)) {
-            return (Resolve-Path $c).Path
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+            return (Resolve-Path -LiteralPath $candidate).Path
         }
     }
     return $null
 }
 
-$WorkspaceRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+function Get-AurumSourceStamp {
+    param([string]$WorkspaceRoot)
+
+    $files = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+    foreach ($name in @("Cargo.toml", "Cargo.lock")) {
+        $path = Join-Path $WorkspaceRoot $name
+        if (Test-Path -LiteralPath $path) {
+            $files.Add((Get-Item -LiteralPath $path))
+        }
+    }
+    $crates = Join-Path $WorkspaceRoot "crates"
+    if (Test-Path -LiteralPath $crates) {
+        Get-ChildItem -LiteralPath $crates -Recurse -File |
+            Where-Object { $_.Extension -in @(".rs", ".toml") } |
+            ForEach-Object { $files.Add($_) }
+    }
+
+    $rows = $files |
+        Sort-Object FullName |
+        ForEach-Object {
+            "$($_.FullName)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)"
+        }
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes(($rows -join "`n"))
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [Convert]::ToHexString($sha.ComputeHash($bytes))
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Invoke-AurumDebugBuild {
+    param(
+        [string]$WorkspaceRoot,
+        [string]$ProjectPath,
+        [string]$GodotPath
+    )
+
+    try {
+        & (Join-Path $PSScriptRoot "build.ps1") `
+            -DebugBuild `
+            -NoTests `
+            -Workspace $WorkspaceRoot `
+            -GodotProject $ProjectPath `
+            -GodotBinary $GodotPath
+        return $LASTEXITCODE -eq 0
+    } catch {
+        Write-Warning "Aurum debug build failed: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+$WorkspaceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if (-not $GodotProject) {
     $GodotProject = Join-Path $WorkspaceRoot "godot"
 }
@@ -95,35 +149,62 @@ if (-not $GodotBinary) {
     }
 }
 
-$AddOnBin = Join-Path $GodotProject "addons\aurum\bin"
-$AddOnBinLinux = $AddOnBin -replace '\\', '/'  # cargo-watch friendly path
+Write-Host "==> Aurum dev mode" -ForegroundColor Cyan
+Write-Host "    Watching: $WorkspaceRoot\crates, Cargo.toml, Cargo.lock"
+Write-Host "    Profile:  debug"
+Write-Host "    Godot:    $GodotBinary"
 
-# Sanity check
-if (-not (Get-Command cargo-watch -ErrorAction SilentlyContinue)) {
-    Write-Error "cargo-watch is not installed. Run: cargo install cargo-watch"
-    exit 1
+$initialBuildOk = Invoke-AurumDebugBuild `
+    -WorkspaceRoot $WorkspaceRoot `
+    -ProjectPath $GodotProject `
+    -GodotPath $GodotBinary
+
+if ($Once) {
+    if (-not $initialBuildOk) {
+        throw "Initial Aurum debug build failed"
+    }
+    Write-Host "==> One debug build completed." -ForegroundColor Green
+    return
 }
 
-Write-Host "==> Aurum dev mode" -ForegroundColor Cyan
-Write-Host "    Watching: crates/ (Rust changes will trigger a rebuild)"
-Write-Host "    Output:   $AddOnBin\aurum_godot.dll"
-Write-Host "    Godot:    $GodotBinary"
-Write-Host "    Press Ctrl+C to stop"
-Write-Host ""
+if ($RunEditor -and $initialBuildOk) {
+    $editorStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $editorStartInfo.FileName = $GodotBinary
+    $editorStartInfo.UseShellExecute = $false
+    [void]$editorStartInfo.ArgumentList.Add("--editor")
+    [void]$editorStartInfo.ArgumentList.Add("--path")
+    [void]$editorStartInfo.ArgumentList.Add($GodotProject)
+    [void][System.Diagnostics.Process]::Start($editorStartInfo)
+}
 
-$WatchArgs = @(
-    "watch",
-    "-w", "crates",
-    "-w", "Cargo.toml",
-    "-w", "Cargo.lock",
-    "-x", "build --release -p aurum-godot",
-    "--post-watch",
-    "powershell -NoProfile -Command `"Copy-Item -Force target/release/aurum_godot.dll '$AddOnBin\aurum_godot.dll' -ErrorAction SilentlyContinue; if (-not `$?) { exit 1 }`""
-)
+$lastStamp = Get-AurumSourceStamp -WorkspaceRoot $WorkspaceRoot
+$pendingSince = $null
+Write-Host "    Watching for changes. Press Ctrl+C to stop."
 
-Push-Location $WorkspaceRoot
-try {
-    & cargo @WatchArgs
-} finally {
-    Pop-Location
+while ($true) {
+    Start-Sleep -Milliseconds $PollMilliseconds
+    $currentStamp = Get-AurumSourceStamp -WorkspaceRoot $WorkspaceRoot
+    if ($currentStamp -ne $lastStamp) {
+        $lastStamp = $currentStamp
+        $pendingSince = [DateTime]::UtcNow
+        continue
+    }
+    if ($null -eq $pendingSince) {
+        continue
+    }
+    $stableFor = ([DateTime]::UtcNow - $pendingSince).TotalMilliseconds
+    if ($stableFor -lt $DebounceMilliseconds) {
+        continue
+    }
+
+    $pendingSince = $null
+    $null = Invoke-AurumDebugBuild `
+        -WorkspaceRoot $WorkspaceRoot `
+        -ProjectPath $GodotProject `
+        -GodotPath $GodotBinary
+    $postBuildStamp = Get-AurumSourceStamp -WorkspaceRoot $WorkspaceRoot
+    if ($postBuildStamp -ne $lastStamp) {
+        $lastStamp = $postBuildStamp
+        $pendingSince = [DateTime]::UtcNow
+    }
 }

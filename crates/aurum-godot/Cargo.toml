@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 aurum-core = { path = "../aurum-core" }
+aurum-space = { path = "../aurum-space" }
 aurum-vn = { path = "../aurum-vn" }
 godot = { workspace = true }
 serde = { workspace = true }
