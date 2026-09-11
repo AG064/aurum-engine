@@ -83,6 +83,41 @@ fn u32_or(args: &Args<'_>, key: &str, default: u32) -> Result<u32, ToolError> {
     }
 }
 
+/// Read a 2D profile: an array of `[x, y]` (or `[radius, height]`) pairs.
+fn profile2(args: &Args<'_>, key: &str) -> Result<Vec<[f32; 2]>, ToolError> {
+    let value = args.value(key)?;
+    let items = value
+        .as_array()
+        .ok_or_else(|| ToolError::Invalid(format!("'{key}' must be an array of [x, y] pairs")))?;
+    if items.len() < 3 {
+        return Err(ToolError::Invalid(format!(
+            "'{key}' needs at least 3 points to describe a closed outline, got {}",
+            items.len()
+        )));
+    }
+
+    let mut out = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let pair = item.as_array().ok_or_else(|| {
+            ToolError::Invalid(format!("'{key}[{index}]' must be an [x, y] pair"))
+        })?;
+        if pair.len() != 2 {
+            return Err(ToolError::Invalid(format!(
+                "'{key}[{index}]' must have exactly 2 numbers, got {}",
+                pair.len()
+            )));
+        }
+        let mut point = [0.0f32; 2];
+        for (axis, component) in pair.iter().enumerate() {
+            point[axis] = component.as_f64().ok_or_else(|| {
+                ToolError::Invalid(format!("'{key}[{index}][{axis}]' must be a number"))
+            })? as f32;
+        }
+        out.push(point);
+    }
+    Ok(out)
+}
+
 /// Resolve a mesh index, reporting a useful error when it does not exist.
 fn mesh_index(args: &Args<'_>, key: &str, document: &Document) -> Result<usize, ToolError> {
     let index = args.i64(key)?;
@@ -725,6 +760,49 @@ fn tool_content_import(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult 
     out["document_node_count"] = json!(ctx.engine.content().scene.len());
     ok(out)
 }
+fn tool_mesh_extrude(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult {
+    let args = Args::new(params)?;
+    let profile = profile2(&args, "profile")?;
+    let depth = f32_or(&args, "depth", 1.0)?;
+    if depth.abs() <= f32::EPSILON {
+        return Err(ToolError::Invalid("'depth' must not be zero".into()));
+    }
+
+    let mut mesh = aurum_content::model::extrude(&profile, depth);
+    if mesh.is_empty() {
+        return Err(ToolError::Invalid(
+            "the profile produced no geometry; check that it is a simple outline".into(),
+        ));
+    }
+    if let Some(name) = args.get("name").and_then(Value::as_str) {
+        mesh.name = name.to_string();
+    }
+
+    let index = ctx.engine.content_mut().add_mesh(mesh);
+    ok(mesh_summary(index, &ctx.engine.content().meshes[index]))
+}
+
+fn tool_mesh_lathe(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult {
+    let args = Args::new(params)?;
+    let profile = profile2(&args, "profile")?;
+    let segments = u32_or(&args, "segments", 24)?;
+    let arc = f32_or(&args, "arc_degrees", 360.0)?;
+
+    let mut mesh = aurum_content::model::lathe(&profile, segments, arc);
+    if mesh.is_empty() {
+        return Err(ToolError::Invalid(
+            "the profile produced no geometry; check that it has at least two distinct points"
+                .into(),
+        ));
+    }
+    if let Some(name) = args.get("name").and_then(Value::as_str) {
+        mesh.name = name.to_string();
+    }
+
+    let index = ctx.engine.content_mut().add_mesh(mesh);
+    ok(mesh_summary(index, &ctx.engine.content().meshes[index]))
+}
+
 // ---------------------------------------------------------------------------
 // Catalog
 // ---------------------------------------------------------------------------
@@ -822,6 +900,49 @@ pub fn catalog() -> Vec<Tool> {
             ),
             read_only: false,
             handler: tool_mesh_merge,
+        },
+        Tool {
+            name: "aurum_mesh_extrude",
+            description: "Extrude a closed 2D outline along Z into a solid, centred on the \
+                          origin. The profile is a list of [x, y] points; concave outlines are \
+                          triangulated correctly rather than fanned. This is the main way to \
+                          build non-primitive shapes.",
+            input_schema: schema(
+                json!({
+                    "profile": {
+                        "type": "array",
+                        "description": "Closed outline as [x, y] pairs, at least 3.",
+                        "items": { "type": "array", "items": { "type": "number" } }
+                    },
+                    "depth": { "type": "number", "description": "Extrusion depth along Z (default 1)." },
+                    "name": { "type": "string" }
+                }),
+                json!(["profile"]),
+            ),
+            read_only: false,
+            handler: tool_mesh_extrude,
+        },
+        Tool {
+            name: "aurum_mesh_lathe",
+            description: "Revolve a profile around the Y axis to make a solid of revolution — \
+                          vases, bowls, columns, wheels, domes. The profile is [radius, height] \
+                          pairs; a radius of 0 puts a point on the axis, which closes the shape \
+                          at that end. Use arc_degrees below 360 for an open shell.",
+            input_schema: schema(
+                json!({
+                    "profile": {
+                        "type": "array",
+                        "description": "Profile as [radius, height] pairs, at least 3.",
+                        "items": { "type": "array", "items": { "type": "number" } }
+                    },
+                    "segments": { "type": "integer", "minimum": 3, "description": "Angular resolution (default 24)." },
+                    "arc_degrees": { "type": "number", "description": "Sweep angle, 1-360 (default 360)." },
+                    "name": { "type": "string" }
+                }),
+                json!(["profile"]),
+            ),
+            read_only: false,
+            handler: tool_mesh_lathe,
         },
         Tool {
             name: "aurum_material_add",
@@ -1576,6 +1697,91 @@ mod tests {
         restored.load_save_json(&saved).unwrap();
         let state = call(&mut restored, &paths, "aurum_content_state", json!({})).unwrap();
         assert_eq!(state["mesh_count"], 0);
+    }
+
+    #[test]
+    fn extrude_and_lathe_build_real_solids() {
+        let (mut engine, paths) = ctx();
+
+        // An L-shaped outline: concave, so a fan triangulation would be wrong.
+        let extruded = call(
+            &mut engine,
+            &paths,
+            "aurum_mesh_extrude",
+            json!({
+                "profile": [[0,0],[2,0],[2,1],[1,1],[1,2],[0,2]],
+                "depth": 1.0,
+                "name": "Bracket"
+            }),
+        )
+        .unwrap();
+        assert_eq!(extruded["name"], "Bracket");
+        // 6 outline points: two caps of (n - 2) triangles each, plus n side quads.
+        assert_eq!(extruded["triangles"], 2 * (6 - 2) + 6 * 2);
+
+        // A vase profile, closed at both ends by zero-radius points.
+        let lathed = call(
+            &mut engine,
+            &paths,
+            "aurum_mesh_lathe",
+            json!({
+                "profile": [[0,0],[0.8,0],[1.0,0.5],[0.6,1.2],[0,1.5]],
+                "segments": 20,
+                "name": "Vase"
+            }),
+        )
+        .unwrap();
+        assert_eq!(lathed["name"], "Vase");
+        assert!(lathed["triangles"].as_i64().unwrap() > 100);
+
+        // Both must be structurally sound enough to export.
+        let valid = call(&mut engine, &paths, "aurum_content_validate", json!({})).unwrap();
+        assert_eq!(valid["valid"], true, "{valid}");
+    }
+
+    #[test]
+    fn profile_tools_validate_their_input() {
+        let (mut engine, paths) = ctx();
+
+        // Too few points to close an outline.
+        let err = call(
+            &mut engine,
+            &paths,
+            "aurum_mesh_extrude",
+            json!({"profile": [[0,0],[1,1]], "depth": 1.0}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("at least 3"), "got: {err}");
+
+        // A pair with the wrong arity.
+        let err = call(
+            &mut engine,
+            &paths,
+            "aurum_mesh_extrude",
+            json!({"profile": [[0,0],[1,1],[2]], "depth": 1.0}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("exactly 2"), "got: {err}");
+
+        // Zero depth would produce a flat sheet with no volume.
+        let err = call(
+            &mut engine,
+            &paths,
+            "aurum_mesh_extrude",
+            json!({"profile": [[0,0],[1,0],[1,1]], "depth": 0}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("depth"), "got: {err}");
+
+        // A lathe profile needs at least two distinct points.
+        let err = call(
+            &mut engine,
+            &paths,
+            "aurum_mesh_lathe",
+            json!({"profile": [[1,1],[1,1],[1,1]]}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no geometry"), "got: {err}");
     }
 
     #[test]
