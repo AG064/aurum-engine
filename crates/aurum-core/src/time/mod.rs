@@ -21,15 +21,26 @@ impl Default for TimeScale {
     }
 }
 
+/// Clamp a time scale into the range the engine accepts.
+///
+/// Written with `max`/`min` rather than `clamp` on purpose. `clamp` propagates
+/// NaN, so a NaN scale would survive into every later `dt` and poison the
+/// frame; this returns the minimum instead, treating a nonsensical scale as
+/// paused rather than as a broken simulation.
+#[allow(clippy::manual_clamp)]
+fn clamp_scale(scale: f32) -> f32 {
+    scale.max(0.0).min(100.0)
+}
+
 impl TimeScale {
     pub fn new(scale: f32) -> Self {
-        Self(scale.max(0.0).min(100.0))
+        Self(clamp_scale(scale))
     }
     pub fn get(self) -> f32 {
         self.0
     }
     pub fn set(&mut self, scale: f32) {
-        self.0 = scale.max(0.0).min(100.0);
+        self.0 = clamp_scale(scale);
     }
     pub fn paused(self) -> bool {
         self.0 == 0.0

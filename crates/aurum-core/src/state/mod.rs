@@ -207,7 +207,7 @@ mod tests {
         s.set("alive", true);
         assert_eq!(s.get_int("score").unwrap(), 42);
         assert_eq!(s.get_string("name").unwrap(), "player");
-        assert_eq!(s.get_bool("alive").unwrap(), true);
+        assert!(s.get_bool("alive").unwrap());
     }
 
     #[test]

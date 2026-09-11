@@ -20,10 +20,17 @@ impl<T> Event for T where T: Any + Send + Sync + Debug + 'static {}
 
 type SubscriberId = u64;
 
+/// A subscriber callback, receiving the event by reference only: an event type
+/// is shared by every subscriber, so none of them may take ownership.
+type Subscriber = Box<dyn FnMut(&dyn Any)>;
+
+/// Subscribers grouped by the `TypeId` of the event they asked for.
+type Subscribers = HashMap<TypeId, Vec<(SubscriberId, Subscriber)>>;
+
 pub struct EventBus {
     next_subscriber_id: SubscriberId,
     /// Subscribers keyed by event `TypeId`.
-    subscribers: HashMap<TypeId, Vec<(SubscriberId, Box<dyn FnMut(&dyn Any)>)>>,
+    subscribers: Subscribers,
     /// Queue of events by type. Drained on `dispatch`.
     queue: VecDeque<(TypeId, Box<dyn Any>)>,
 }
@@ -113,10 +120,10 @@ mod tests {
         damage: i32,
     }
 
+    /// A second event type that carries no data: this test only needs a type
+    /// distinct from `Hit`, so a payload would be noise.
     #[derive(Debug)]
-    struct Score {
-        amount: i32,
-    }
+    struct Score;
 
     #[test]
     fn deliver_to_subscribers() {
@@ -140,11 +147,11 @@ mod tests {
         let id = bus.subscribe::<Score, _>(move |_| {
             *count2.lock().unwrap() += 1;
         });
-        bus.emit(Score { amount: 1 });
+        bus.emit(Score);
         bus.dispatch();
         assert_eq!(*count.lock().unwrap(), 1);
         bus.unsubscribe(id);
-        bus.emit(Score { amount: 2 });
+        bus.emit(Score);
         bus.dispatch();
         assert_eq!(*count.lock().unwrap(), 1);
     }
