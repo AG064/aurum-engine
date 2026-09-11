@@ -1,59 +1,63 @@
 /* Aurum Studio.
    Godot renders the game; this only has to be worth looking at while it does.
 
-   The material is gold, used the way a jeweller uses it: hairlines, a small
-   mark, a lit edge. Never a large fill, because gold spread thin stops reading
-   as gold. Everything else is near-black with a warm undertone rather than the
-   usual cold grey, so the accent belongs to the surface instead of sitting on
-   top of it.
+   The material is gold, used the way a jeweller uses it: a mark, a lit
+   hairline, a single accented control. Never a large fill, because gold spread
+   thin stops reading as gold. Everything else is near-black with a warm
+   undertone rather than the usual cold grey, so the accent belongs to the
+   surface rather than sitting on top of it.
 
-   No webfont and no external image: the page is required to contain no
-   external reference at all, so the type is a system stack and the mark is
-   inline SVG. */
+   The composition has one focal point. The project's identity and its verdict
+   are the largest things on the page and sit together at the top, because that
+   is the one question this window answers at a glance: what am I working on,
+   and is it well. Everything below is apparatus, and the console takes the
+   space that is left rather than the layout leaving a hole in the middle.
+
+   No webfont and no fetched image: the page is required to contain no external
+   reference at all, so the type is a system stack and the mark is inline SVG. */
 
 :root {
-  /* Surfaces, warm-shifted. A pure grey next to gold reads as dirty. */
-  --void: #08090b;
-  --base: #0d0f12;
-  --panel-hi: #16191e;
-  --panel-lo: #111318;
-  --sunk: #0a0c0f;
+  /* Surfaces, warm-shifted. A pure grey beside gold reads as dirty. */
+  --void: #07080a;
+  --base: #0c0e11;
+  --panel-hi: #15181d;
+  --panel-lo: #101317;
 
-  /* Hairlines. The top edge of a surface catches light; the bottom does not. */
-  --edge: rgba(255, 255, 255, 0.07);
-  --edge-lit: rgba(255, 255, 255, 0.13);
-  --edge-gold: rgba(212, 162, 76, 0.28);
+  --edge: rgba(255, 255, 255, 0.065);
+  --edge-lit: rgba(255, 255, 255, 0.12);
+  --edge-gold: rgba(216, 169, 79, 0.3);
 
-  --ink: #eceef2;
-  --ink-mid: #a2abb8;
-  --ink-dim: #6b7381;
-  --ink-faint: #454c57;
+  /* Contrast is deliberately generous for a dark interface. The first pass
+     used ink barely lighter than the surface and read as murk: dark is not the
+     same as dim, and a tool you cannot read at a glance is not premium, it is
+     just hard work. */
+  --ink: #f2f4f8;
+  --ink-mid: #c2cad6;
+  --ink-dim: #8e98a6;
+  --ink-faint: #656e7c;
 
-  --gold: #d4a24c;
-  --gold-lit: #f2cf85;
-  --gold-deep: #8a6220;
-  --gold-veil: rgba(212, 162, 76, 0.11);
-  --gold-line: rgba(212, 162, 76, 0.22);
+  --gold: #d8a94f;
+  --gold-lit: #f6dc9f;
+  --gold-veil: rgba(216, 169, 79, 0.12);
+  --gold-line: rgba(216, 169, 79, 0.26);
 
-  --good: #63c07a;
-  --good-veil: rgba(99, 192, 122, 0.12);
-  --bad: #e26a5f;
-  --bad-veil: rgba(226, 106, 95, 0.12);
-  --warn: #e0b154;
-  --warn-veil: rgba(224, 177, 84, 0.12);
+  --good: #66c47e;
+  --bad: #e46d61;
+  --warn: #e2b458;
 
   --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
     "Helvetica Neue", sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", ui-monospace,
     monospace;
 
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --fast: 140ms;
-  --slow: 260ms;
+  --slow: 280ms;
 
-  --r-sm: 7px;
-  --r-md: 11px;
-  --r-lg: 16px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
 }
 
 *,
@@ -69,50 +73,90 @@ body {
 
 body {
   margin: 0;
+  /* A shell, not a document: the console scrolls, the page does not. */
+  overflow: hidden;
   background: var(--void);
   color: var(--ink);
   font-family: var(--font);
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: 13.5px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
 }
 
-/* A single warm light source, upper left, well behind everything. It is what
-   stops a dark UI reading as flat, and it is why the panels can stay quiet. */
+/* One warm light source at the upper left, well behind everything, and a cool
+   counter-glow at the right so the dark side is not dead. This is what keeps a
+   near-black interface from reading as flat. */
 .ambient {
   position: fixed;
   inset: 0;
-  pointer-events: none;
   z-index: 0;
+  pointer-events: none;
   background:
     radial-gradient(
-      900px 520px at 12% -8%,
-      rgba(212, 162, 76, 0.13),
-      transparent 62%
-    ),
-    radial-gradient(
-      700px 460px at 96% 4%,
-      rgba(120, 90, 200, 0.06),
+      780px 420px at 6% -12%,
+      rgba(216, 169, 79, 0.16),
       transparent 60%
     ),
-    linear-gradient(180deg, #0e1014 0%, var(--void) 58%);
+    radial-gradient(
+      620px 400px at 102% -6%,
+      rgba(96, 132, 220, 0.07),
+      transparent 58%
+    ),
+    linear-gradient(178deg, #0e1116 0%, var(--void) 54%);
+}
+
+/* A laid-paper grain over the whole surface. Two screens of near-transparent
+   dots at different pitches read as texture rather than as a pattern, which is
+   the difference between expensive paper and wallpaper. */
+.grain {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image:
+    radial-gradient(circle, rgba(255, 255, 255, 0.035) 0.5px, transparent 0.5px),
+    radial-gradient(circle, rgba(255, 255, 255, 0.02) 0.5px, transparent 0.5px);
+  background-size:
+    3px 3px,
+    7px 7px;
+  background-position:
+    0 0,
+    2px 3px;
 }
 
 .app {
   position: relative;
-  z-index: 1;
-  min-height: 100%;
+  z-index: 2;
+  height: 100%;
   display: flex;
   flex-direction: column;
   animation: settle var(--slow) var(--ease) both;
 }
 
+/* The gold hairline across the very top, like the edge of a machined face. */
+.app::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--gold-line) 22%,
+    rgba(246, 220, 159, 0.55) 50%,
+    var(--gold-line) 78%,
+    transparent
+  );
+}
+
 @keyframes settle {
   from {
     opacity: 0;
-    transform: translateY(5px);
+    transform: translateY(4px);
   }
 }
 
@@ -122,27 +166,8 @@ body {
   display: flex;
   align-items: center;
   gap: 18px;
-  padding: 15px 26px;
-  position: relative;
-}
-
-/* The lit hairline under the header. A gradient rather than a border, so it
-   fades out instead of stopping dead at the edges. */
-.chrome::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    var(--edge-lit) 18%,
-    var(--edge-gold) 50%,
-    var(--edge-lit) 82%,
-    transparent
-  );
+  padding: 14px 30px;
+  flex: none;
 }
 
 .brand {
@@ -152,54 +177,25 @@ body {
 }
 
 .mark {
-  width: 23px;
-  height: 23px;
+  width: 22px;
+  height: 22px;
   display: block;
-  filter: drop-shadow(0 0 9px rgba(212, 162, 76, 0.34));
+  filter: drop-shadow(0 0 10px rgba(216, 169, 79, 0.38));
 }
 
 .wordmark {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.19em;
   text-transform: uppercase;
-  color: var(--ink);
   white-space: nowrap;
 }
 
 .wordmark i {
   font-style: normal;
-  font-weight: 300;
+  font-weight: 200;
   color: var(--gold);
-  margin-left: 0.42em;
-}
-
-.project-chip {
-  display: flex;
-  align-items: baseline;
-  gap: 9px;
-  margin-left: 14px;
-  padding: 5px 13px;
-  border: 1px solid var(--edge);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.018);
-  min-width: 0;
-}
-
-.chip-label {
-  font-size: 9.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: var(--ink-faint);
-}
-
-.chip-value {
-  font-size: 12.5px;
-  color: var(--ink-mid);
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  margin-left: 0.44em;
 }
 
 .connection {
@@ -207,27 +203,37 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
+  font-size: 10.5px;
   text-transform: uppercase;
-  letter-spacing: 0.13em;
+  letter-spacing: 0.15em;
   color: var(--ink-dim);
   white-space: nowrap;
+  padding: 5px 12px 5px 11px;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.018);
+  transition:
+    border-color var(--slow) var(--ease),
+    color var(--slow) var(--ease);
 }
 
 .pulse {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--ink-faint);
   position: relative;
   flex: none;
 }
 
-/* The ring expands and fades, which reads as "live" without a spinner
-   competing with the one in the status line. */
+.connection[data-state="open"] {
+  color: var(--ink-mid);
+  border-color: rgba(102, 196, 126, 0.26);
+}
+
 .connection[data-state="open"] .pulse {
   background: var(--good);
-  box-shadow: 0 0 8px rgba(99, 192, 122, 0.7);
+  box-shadow: 0 0 9px rgba(102, 196, 126, 0.8);
 }
 
 .connection[data-state="open"] .pulse::after {
@@ -236,309 +242,139 @@ body {
   inset: -4px;
   border-radius: 50%;
   border: 1px solid var(--good);
-  animation: breathe 2.4s var(--ease) infinite;
+  animation: breathe 2.6s var(--ease) infinite;
+}
+
+.connection[data-state="closed"] {
+  color: var(--bad);
+  border-color: rgba(228, 109, 97, 0.3);
 }
 
 .connection[data-state="closed"] .pulse {
   background: var(--bad);
-  box-shadow: 0 0 8px rgba(226, 106, 95, 0.6);
+  box-shadow: 0 0 9px rgba(228, 109, 97, 0.7);
 }
 
 @keyframes breathe {
   0% {
-    transform: scale(0.7);
-    opacity: 0.85;
+    transform: scale(0.65);
+    opacity: 0.9;
   }
   70%,
   100% {
-    transform: scale(1.5);
+    transform: scale(1.6);
     opacity: 0;
   }
 }
 
-/* -- layout -------------------------------------------------------------- */
+/* -- the focal point ----------------------------------------------------- */
 
-main {
-  flex: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
-  gap: 18px;
-  padding: 22px 26px;
-  align-items: start;
-}
-
-.panel {
-  position: relative;
-  border: 1px solid var(--edge);
-  border-radius: var(--r-lg);
-  padding: 20px 22px 22px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0)),
-    linear-gradient(180deg, var(--panel-hi), var(--panel-lo));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.045),
-    0 18px 40px -26px rgba(0, 0, 0, 0.95),
-    0 2px 6px -3px rgba(0, 0, 0, 0.6);
-}
-
-.panel.wide {
-  grid-column: 1 / -1;
-}
-
-.panel-head {
+.stage {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 15px;
+  justify-content: space-between;
+  gap: 40px;
+  padding: 26px 30px 30px;
+  flex: none;
 }
 
-.panel-head.spaced {
-  margin-top: 26px;
-}
-
-.panel-head h2 {
-  margin: 0;
-  font-size: 10px;
+.eyebrow,
+.console-title,
+.group-head span {
+  font-size: 9.5px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.19em;
-  color: var(--ink-dim);
+  letter-spacing: 0.22em;
+  color: var(--ink-faint);
+}
+
+.identity {
+  min-width: 0;
+}
+
+/* Large and light. Thin type at size is the oldest trick for looking
+   expensive, and it costs nothing here because the system stack has a light
+   weight on every platform this ships to. */
+.project-name {
+  margin: 8px 0 7px;
+  font-family: var(--font-display);
+  font-size: clamp(30px, 3.4vw, 44px);
+  font-weight: 200;
+  line-height: 1.04;
+  letter-spacing: -0.022em;
+  color: var(--ink);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* The rule runs from the label to the edge, so each section starts with a
-   line rather than a floating word. */
-.rule {
-  flex: 1;
-  height: 1px;
-  background: linear-gradient(90deg, var(--edge), transparent);
+.project-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
 }
 
-/* -- buttons ------------------------------------------------------------- */
-
-.buttons {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(142px, 1fr));
+/* The verdict, at the scale of the thing it reports on. */
+.health {
+  flex: none;
+  text-align: right;
+  min-width: 210px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   gap: 10px;
 }
 
-button {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  padding: 11px 15px 12px;
-  font: inherit;
-  color: var(--ink);
-  text-align: left;
-  cursor: pointer;
-  border: 1px solid var(--edge);
-  border-radius: var(--r-md);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0)),
-    #1b1f26;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 2px 5px -2px rgba(0, 0, 0, 0.7);
-  transition:
-    border-color var(--fast) var(--ease),
-    background-color var(--fast) var(--ease),
-    transform var(--fast) var(--ease),
-    box-shadow var(--fast) var(--ease);
-}
-
-button:hover {
-  border-color: var(--edge-gold);
-  background-color: #21262e;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 6px 18px -10px rgba(212, 162, 76, 0.55),
-    0 2px 6px -2px rgba(0, 0, 0, 0.7);
-}
-
-button:active {
-  transform: translateY(1px);
-  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.5);
-}
-
-/* A gold ring rather than the browser's blue, and only for keyboard users —
-   it is an accessibility affordance, not decoration. */
-button:focus-visible,
-.ghost:focus-visible {
-  outline: none;
-  border-color: var(--gold);
-  box-shadow:
-    0 0 0 3px rgba(212, 162, 76, 0.22),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
-
-.btn-label {
-  font-size: 13.5px;
-  font-weight: 600;
-  letter-spacing: 0.005em;
-}
-
-.btn-hint {
-  font-size: 10.5px;
-  color: var(--ink-faint);
-  letter-spacing: 0.015em;
-}
-
-button:hover .btn-hint {
-  color: var(--ink-dim);
-}
-
-/* The one button that carries the accent, because it is the one pressed most. */
-button.primary {
-  border-color: var(--gold-line);
-  background:
-    linear-gradient(180deg, rgba(212, 162, 76, 0.16), rgba(212, 162, 76, 0.04)),
-    #221d13;
-}
-
-button.primary .btn-label {
-  color: var(--gold-lit);
-}
-
-button.primary:hover {
-  border-color: rgba(212, 162, 76, 0.5);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 8px 22px -10px rgba(212, 162, 76, 0.6);
-}
-
-button.danger:hover {
-  border-color: rgba(226, 106, 95, 0.45);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 6px 18px -10px rgba(226, 106, 95, 0.5);
-}
-
-button.ghost {
-  flex-direction: row;
-  align-items: center;
-  padding: 4px 11px;
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.13em;
-  color: var(--ink-dim);
-  background: transparent;
-  border-color: var(--edge);
-  box-shadow: none;
-  font-weight: 500;
-}
-
-button.ghost:hover {
-  color: var(--ink);
-  border-color: var(--edge-gold);
-  background-color: rgba(212, 162, 76, 0.06);
-  box-shadow: none;
-}
-
-/* -- status line --------------------------------------------------------- */
-
-.status-line {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--edge);
-  min-height: 21px;
-  font-size: 12px;
-  color: var(--ink-dim);
-}
-
-.status-line[data-active="false"] .spinner {
-  display: none;
-}
-
-.status-line[data-active="false"] .status-text:empty::before {
-  content: "Idle";
-  color: var(--ink-faint);
-}
-
-.status-line[data-active="true"] .status-text {
-  color: var(--gold-lit);
-}
-
-.spinner {
-  width: 12px;
-  height: 12px;
-  flex: none;
-  border-radius: 50%;
-  border: 1.5px solid rgba(212, 162, 76, 0.22);
-  border-top-color: var(--gold);
-  animation: spin 720ms linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* -- health -------------------------------------------------------------- */
-
-.health {
-  min-height: 116px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
 .health-idle {
-  text-align: center;
-  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
 }
 
 .idle-mark {
-  display: block;
-  width: 26px;
-  height: 26px;
-  margin: 0 auto 11px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   border: 1px dashed var(--ink-faint);
-  opacity: 0.65;
-}
-
-.health-idle p {
-  margin: 0 0 5px;
-  color: var(--ink-dim);
-  font-size: 13px;
+  opacity: 0.5;
 }
 
 .idle-hint {
   font-size: 11.5px;
   color: var(--ink-faint);
-  max-width: 34ch;
-  display: inline-block;
+  line-height: 1.6;
+  text-align: right;
 }
 
 .verdict {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  align-self: flex-start;
-  padding: 6px 15px 6px 12px;
+  gap: 13px;
+  padding: 14px 28px 14px 22px;
   border-radius: 999px;
   border: 1px solid var(--edge);
   background: rgba(255, 255, 255, 0.03);
-  font-size: 11px;
+  font-size: 16px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.24em;
+  color: var(--ink-mid);
   animation: rise var(--slow) var(--ease) both;
 }
 
 .verdict::before {
   content: "";
-  width: 7px;
-  height: 7px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: currentColor;
-  box-shadow: 0 0 9px currentColor;
+  box-shadow: 0 0 14px currentColor;
   flex: none;
 }
 
@@ -550,43 +386,360 @@ button.ghost:hover {
 }
 
 /* These three selectors are the strings `Health::label()` emits, and a test in
-   assets.rs asserts they stay in step. They were once `.Healthy`, which never
-   matched, and only running it said so. */
+   assets.rs keeps the two in step. They were once `.Healthy`, which never
+   matched anything, and only running it said so. */
 .verdict.ok {
   color: var(--good);
-  border-color: rgba(99, 192, 122, 0.3);
-  background: var(--good-veil);
+  border-color: rgba(102, 196, 126, 0.34);
+  background: rgba(102, 196, 126, 0.1);
+  box-shadow: 0 0 34px -12px rgba(102, 196, 126, 0.75);
 }
 
 .verdict.warning {
   color: var(--warn);
-  border-color: rgba(224, 177, 84, 0.3);
-  background: var(--warn-veil);
+  border-color: rgba(226, 180, 88, 0.34);
+  background: rgba(226, 180, 88, 0.1);
+  box-shadow: 0 0 34px -12px rgba(226, 180, 88, 0.75);
 }
 
 .verdict.blocked {
   color: var(--bad);
-  border-color: rgba(226, 106, 95, 0.3);
-  background: var(--bad-veil);
+  border-color: rgba(228, 109, 97, 0.34);
+  background: rgba(228, 109, 97, 0.1);
+  box-shadow: 0 0 34px -12px rgba(228, 109, 97, 0.75);
 }
 
 .summary {
-  margin-top: 13px;
-  color: var(--ink-mid);
-  font-size: 13px;
+  font-size: 12.5px;
+  color: var(--ink-dim);
 }
 
-/* -- log ----------------------------------------------------------------- */
+/* -- apparatus ----------------------------------------------------------- */
+
+.controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 26px;
+  padding: 0 30px 18px;
+  flex: none;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.toolbar-label,
+.console-title {
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--ink-faint);
+}
+
+.toolbar-label {
+  margin-right: 5px;
+}
+
+.console-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--edge), transparent);
+}
+
+button {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px 9px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  cursor: pointer;
+  border: 1px solid var(--edge);
+  border-radius: var(--r-md);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0)),
+    #1b1f26;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 2px 5px -2px rgba(0, 0, 0, 0.75);
+  transition:
+    border-color var(--fast) var(--ease),
+    background-color var(--fast) var(--ease),
+    transform var(--fast) var(--ease),
+    box-shadow var(--fast) var(--ease);
+}
+
+/* The icon is what stops these reading as plain rectangles. It brightens to
+   the accent on hover, so the whole control answers rather than just its
+   edge. */
+.icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--ink-dim);
+  transition: color var(--fast) var(--ease);
+}
+
+button:hover {
+  border-color: var(--edge-gold);
+  background-color: #222831;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 8px 22px -12px rgba(216, 169, 79, 0.65),
+    0 2px 6px -2px rgba(0, 0, 0, 0.75);
+}
+
+button:hover .icon {
+  color: var(--gold);
+}
+
+button:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.55);
+}
+
+button:focus-visible {
+  outline: none;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(216, 169, 79, 0.24);
+}
+
+.btn-label {
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.btn-hint {
+  display: none;
+}
+
+/* The one control carrying the accent, because it is the one pressed most. */
+button.primary {
+  border-color: var(--gold-line);
+  background:
+    linear-gradient(180deg, rgba(216, 169, 79, 0.17), rgba(216, 169, 79, 0.035)),
+    #221d14;
+  color: var(--gold-lit);
+}
+
+button.primary .icon {
+  color: var(--gold);
+}
+
+button.primary:hover {
+  border-color: rgba(216, 169, 79, 0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 10px 26px -12px rgba(216, 169, 79, 0.75);
+}
+
+/* A single sheen that crosses the accented control on hover. It is the only
+   motion in the interface that is not reporting something. */
+button.primary::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 45%;
+  left: -60%;
+  background: linear-gradient(
+    100deg,
+    transparent,
+    rgba(246, 220, 159, 0.16),
+    transparent
+  );
+  transform: skewX(-18deg);
+  transition: left 620ms var(--ease);
+  pointer-events: none;
+}
+
+button.primary:hover::after {
+  left: 130%;
+}
+
+button.danger:hover {
+  border-color: rgba(228, 109, 97, 0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.075),
+    0 8px 22px -12px rgba(228, 109, 97, 0.55);
+}
+
+button.danger:hover .icon {
+  color: var(--bad);
+}
+
+/* A quiet button for actions that are not the point of the panel. */
+button.ghost {
+  overflow: visible;
+  padding: 4px 11px;
+  font-size: 9.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--ink-dim);
+  background: transparent;
+  border-color: var(--edge);
+  box-shadow: none;
+}
+
+button.ghost:hover {
+  color: var(--ink);
+  border-color: var(--edge-gold);
+  background-color: var(--gold-veil);
+  box-shadow: none;
+}
+
+button.ghost:focus-visible {
+  outline: none;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(216, 169, 79, 0.24);
+}
+
+/* -- status line --------------------------------------------------------- */
+
+.status-line {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  min-height: 17px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+/* A log with nothing in it is centred rather than left hanging at the top of a
+   large empty surface, which reads as a failure to load. */
+.log:has(li.log-empty) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.log-empty {
+  color: var(--ink-faint);
+  font-style: italic;
+  padding: 0;
+  border-left: 0;
+}
+
+.log-empty:hover {
+  background: none;
+}
+
+.status-line[data-active="false"] .spinner {
+  display: none;
+}
+
+.status-line[data-active="false"] .status-text:empty::before {
+  content: "Idle";
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+}
+
+.status-line[data-active="true"] .status-text {
+  color: var(--gold-lit);
+}
+
+.spinner {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid rgba(216, 169, 79, 0.2);
+  border-top-color: var(--gold);
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* -- console ------------------------------------------------------------- */
+
+.console {
+  position: relative;
+  flex: 1;
+  /* Without this a flex child refuses to shrink below its content, and the
+     console would push the footer off the bottom instead of scrolling. */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Full width and square, unlike every other surface on the page. The log is
+     not a card among cards — it is the machine talking, and giving it the
+     whole width says so. It is also what stops the layout reading as a grid
+     of rounded boxes, which is the shape every dashboard has. */
+  margin: 0;
+  padding: 18px 30px 14px;
+  border: 0;
+  border-top: 1px solid var(--edge);
+  /* Recessed rather than raised: this is a surface you look into. The grid
+     keeps the empty part from reading as a hole — a void looks like something
+     failed to load, ruled paper looks like somewhere to write. */
+  background:
+    radial-gradient(circle, rgba(255, 255, 255, 0.05) 0.5px, transparent 0.5px)
+      0 0 / 22px 22px,
+    radial-gradient(120% 90% at 50% -20%, rgba(216, 169, 79, 0.055), transparent 62%),
+    linear-gradient(180deg, #0b0d11, #090b0e);
+  box-shadow: inset 0 18px 36px -26px rgba(0, 0, 0, 1);
+}
+
+/* A second hairline just under the first, fading. It reads as the lip of a
+   machined edge rather than a drawn line. */
+.console::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--gold-line) 30%,
+    var(--gold-line) 70%,
+    transparent
+  );
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.console-head {
+  flex: none;
+  margin-bottom: 12px;
+}
 
 .log {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 44vh;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   font-family: var(--font-mono);
-  font-size: 12.5px;
-  /* Tabular figures so timestamps form a clean column instead of a ragged one. */
+  font-size: 12px;
+  /* Tabular figures so timestamps form a column rather than a ragged edge. */
   font-variant-numeric: tabular-nums;
   scrollbar-width: thin;
   scrollbar-color: #2b313a transparent;
@@ -595,14 +748,14 @@ button.ghost:hover {
 .log li {
   display: flex;
   gap: 14px;
-  padding: 4px 8px 4px 10px;
+  padding: 3px 8px 3px 10px;
   border-radius: var(--r-sm);
   border-left: 2px solid transparent;
   transition: background-color var(--fast) var(--ease);
 }
 
 .log li:hover {
-  background: rgba(255, 255, 255, 0.026);
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .log li:not(.log-empty) {
@@ -612,15 +765,14 @@ button.ghost:hover {
 @keyframes slide {
   from {
     opacity: 0;
-    transform: translateX(-4px);
+    transform: translateX(-5px);
   }
 }
 
 .log time {
   color: var(--ink-faint);
   flex: none;
-  letter-spacing: 0.02em;
-  font-size: 11.5px;
+  font-size: 11px;
   padding-top: 1px;
 }
 
@@ -630,14 +782,14 @@ button.ghost:hover {
 }
 
 .log .good {
-  border-left-color: rgba(99, 192, 122, 0.5);
+  border-left-color: rgba(102, 196, 126, 0.5);
 }
 .log .good span {
   color: var(--good);
 }
 
 .log .bad {
-  border-left-color: rgba(226, 106, 95, 0.5);
+  border-left-color: rgba(228, 109, 97, 0.5);
 }
 .log .bad span {
   color: var(--bad);
@@ -650,10 +802,26 @@ button.ghost:hover {
   color: var(--gold);
 }
 
-.log-empty {
-  color: var(--ink-faint);
-  font-style: italic;
-  padding: 6px 10px;
+.caret {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  margin-left: 7px;
+  vertical-align: -2px;
+  background: var(--gold);
+  opacity: 0.75;
+  animation: blink 1.15s steps(1, end) infinite;
+}
+
+@keyframes blink {
+  0%,
+  49% {
+    opacity: 0.75;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
 }
 
 /* -- footer -------------------------------------------------------------- */
@@ -662,8 +830,8 @@ footer {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 14px 26px;
-  border-top: 1px solid var(--edge);
+  padding: 0 30px 16px;
+  flex: none;
   font-size: 11.5px;
   color: var(--ink-faint);
 }
@@ -673,11 +841,11 @@ footer {
 }
 
 .foot-local {
-  font-size: 10px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
   text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: var(--ink-faint);
-  padding: 3px 10px;
+  letter-spacing: 0.15em;
+  padding: 4px 11px;
   border: 1px solid var(--edge);
   border-radius: 999px;
 }
@@ -701,23 +869,49 @@ footer {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(212, 162, 76, 0.42);
+  background: rgba(216, 169, 79, 0.45);
   background-clip: content-box;
 }
 
 ::selection {
-  background: rgba(212, 162, 76, 0.26);
+  background: rgba(216, 169, 79, 0.28);
   color: #fff;
 }
 
-@media (max-width: 860px) {
-  main {
+/* Honour the system setting. The entrance animation starts at zero opacity, so
+   somebody who has asked for less motion would otherwise watch the whole
+   interface fade up on every load — and anything that samples the page during
+   those milliseconds sees a washed-out shell rather than the design. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@media (max-width: 900px) {
+  body {
+    overflow: auto;
+  }
+  .controls,
+  .stage {
     grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: flex-start;
   }
-  .chrome {
-    flex-wrap: wrap;
+  .health {
+    align-items: flex-start;
+    text-align: left;
   }
-  .project-chip {
-    margin-left: 0;
+  .health-idle,
+  .idle-hint {
+    align-items: flex-start;
+    text-align: left;
+  }
+  .console {
+    min-height: 240px;
   }
 }

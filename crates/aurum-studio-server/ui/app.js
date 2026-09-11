@@ -30,14 +30,14 @@
   const connection = $('connection');
   const connectionText = connection.querySelector('.connection-text');
   const project = $('project');
-  const projectValue = project.querySelector('.chip-value');
+  const projectPath = $('project-path');
   const log = $('log');
   const health = $('health');
   const busy = $('busy');
   const busyText = busy.querySelector('.status-text');
 
   const MAX_LINES = 500;
-  const EMPTY_LOG = 'Nothing has happened yet.';
+  const EMPTY_LOG = 'Waiting for the first event<span class="caret"></span>';
 
   // -- small renderers ---------------------------------------------------
 
@@ -46,9 +46,11 @@
     connectionText.textContent = label;
   }
 
-  function setProject(name) {
-    projectValue.textContent = name || 'project';
+  function setProject(name, root) {
+    project.textContent = name || 'project';
     project.title = name || '';
+    projectPath.textContent = root || '';
+    projectPath.title = root || '';
   }
 
   function setBusy(text) {
@@ -139,7 +141,8 @@
     log.replaceChildren();
     const placeholder = document.createElement('li');
     placeholder.className = 'log-empty';
-    placeholder.textContent = EMPTY_LOG;
+    // A constant defined here, never anything from the server.
+    placeholder.innerHTML = EMPTY_LOG;
     log.append(placeholder);
   });
 
@@ -226,7 +229,7 @@
   fetch('/api/state', { headers: stateHeaders })
     .then((response) => response.json())
     .then((state) => {
-      setProject(state.project);
+      setProject(state.project, state.root);
       say('Studio ' + state.studio + ' · ' + state.root, 'note');
     })
     .catch(() => {
