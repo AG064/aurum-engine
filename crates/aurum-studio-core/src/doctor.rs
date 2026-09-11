@@ -195,6 +195,55 @@ impl Report {
     }
 }
 
+/// How the project stands with the editor bridge plugin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditorPluginState {
+    /// Present, and listed among the project's enabled plugins.
+    Enabled,
+    /// On disk but not enabled, so it never runs.
+    Present,
+    /// Not there at all.
+    Absent,
+}
+
+/// Whether the editor bridge plugin is installed **and** switched on.
+///
+/// The distinction is the point. A plugin copied into `addons/` but never
+/// listed in `project.godot` looks installed from the filesystem and does
+/// nothing at all, which is the case that wastes somebody's afternoon.
+fn editor_plugin_state(project: &Project) -> EditorPluginState {
+    let Some(godot_root) = project.godot_project_dir() else {
+        return EditorPluginState::Absent;
+    };
+    let plugin = godot_root
+        .join("addons")
+        .join("aurum_editor")
+        .join("plugin.cfg");
+    if !plugin.is_file() {
+        return EditorPluginState::Absent;
+    }
+
+    // An unreadable project file counts as merely present: the plugin is
+    // definitely there, and guessing that it is enabled would be worse than
+    // saying nothing certain.
+    let Ok(text) = std::fs::read_to_string(godot_root.join("project.godot")) else {
+        return EditorPluginState::Present;
+    };
+
+    // The enabled list is one `PackedStringArray` line under
+    // `[editor_plugins]`. Tracking the section is unnecessary, because a
+    // plugin path appears nowhere else in a project file.
+    let listed = text
+        .lines()
+        .any(|line| line.trim_start().starts_with("enabled=") && line.contains("aurum_editor"));
+
+    if listed {
+        EditorPluginState::Enabled
+    } else {
+        EditorPluginState::Present
+    }
+}
+
 /// Diagnose a project.
 ///
 /// Read-only: nothing here creates, modifies, or deletes anything, so running
@@ -270,6 +319,40 @@ pub fn diagnose(project: &Project, toolchain: &Toolchain, godot_hint: Option<&Pa
         None => findings.push(
             Finding::warning("installed_library", "no installed debug extension")
                 .with_remedy("run `aurum build` to produce one"),
+        ),
+    }
+
+    // ----- the editor bridge ---------------------------------------------
+
+    // Without this plugin Studio can still build and launch, so this is a
+    // warning rather than a blocker. What it costs is the evidence: the plugin
+    // is what publishes the fingerprint the running extension actually
+    // reports, so without it nobody can tell whether a rebuild was picked up
+    // or merely written to disk.
+    match editor_plugin_state(project) {
+        EditorPluginState::Enabled => findings.push(
+            Finding::ok("editor_plugin", "the editor bridge plugin is enabled")
+                .with_evidence("addons/aurum_editor, listed in [editor_plugins]"),
+        ),
+        EditorPluginState::Present => findings.push(
+            Finding::warning(
+                "editor_plugin",
+                "the editor bridge plugin is installed but not enabled",
+            )
+            .with_evidence(
+                "addons/aurum_editor/plugin.cfg exists, but project.godot does not list it",
+            )
+            .with_remedy(
+                "add \"res://addons/aurum_editor/plugin.cfg\" to [editor_plugins] enabled in \
+                 project.godot; a plugin that is present but not enabled runs nothing",
+            ),
+        ),
+        EditorPluginState::Absent => findings.push(
+            Finding::warning("editor_plugin", "the editor bridge plugin is not installed")
+                .with_remedy(
+                    "copy the repository's godot/addons/aurum_editor into the project's addons \
+                     directory to get live reload confirmation",
+                ),
         ),
     }
 
@@ -433,9 +516,51 @@ mod tests {
         }
     }
 
+    /// A real directory on disk, for the checks that read the filesystem.
+    fn temp_dir(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path =
+            std::env::temp_dir().join(format!("aurum-doctor-{tag}-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create temp directory");
+        path
+    }
+
+    /// A project whose editor-bridge plugin is present and enabled.
+    ///
+    /// Only the bridge check reads real files — everything else is answered
+    /// from the discovered layout — so this is the one part of a "complete"
+    /// project that has to exist.
+    fn with_bridge_plugin(root: &Path, enabled: bool) -> Layout {
+        let godot = root.join("godot");
+        let plugin = godot.join("addons").join("aurum_editor");
+        std::fs::create_dir_all(&plugin).expect("create plugin directory");
+        std::fs::write(
+            plugin.join("plugin.cfg"),
+            "[plugin]\nname=\"AurumEditor\"\n",
+        )
+        .expect("write plugin.cfg");
+
+        let enabled_line = if enabled {
+            "[editor_plugins]\nenabled=PackedStringArray(\"res://addons/aurum/plugin.cfg\", \
+             \"res://addons/aurum_editor/plugin.cfg\")\n"
+        } else {
+            "[editor_plugins]\nenabled=PackedStringArray(\"res://addons/aurum/plugin.cfg\")\n"
+        };
+        std::fs::write(godot.join("project.godot"), enabled_line).expect("write project.godot");
+
+        let mut layout = full_layout();
+        layout.godot_project = Some(godot.join("project.godot"));
+        layout
+    }
+
     #[test]
     fn a_complete_project_is_healthy() {
-        let report = diagnose(&project_with(full_layout()), &full_toolchain(), None);
+        let root = temp_dir("complete");
+        let layout = with_bridge_plugin(&root, true);
+        let report = diagnose(&project_with(layout), &full_toolchain(), None);
         assert_eq!(
             report.health(),
             Health::Healthy,
@@ -443,6 +568,56 @@ mod tests {
             report.problems()
         );
         assert_eq!(report.count(Health::Blocked), 0);
+    }
+
+    #[test]
+    fn a_plugin_that_is_present_but_not_enabled_is_reported_as_such() {
+        // The case that wastes an afternoon: the files are all there, so it
+        // looks installed, and it runs nothing.
+        let root = temp_dir("notenabled");
+        let layout = with_bridge_plugin(&root, false);
+        let report = diagnose(&project_with(layout), &full_toolchain(), None);
+
+        let finding = report.find("editor_plugin").expect("a finding is expected");
+        assert_eq!(finding.health, Health::Warning);
+        assert!(
+            finding.summary.contains("not enabled"),
+            "the summary should name the real problem, got '{}'",
+            finding.summary
+        );
+        assert!(
+            finding.remedy.is_some(),
+            "a warning about configuration should say how to fix it"
+        );
+        // Not a blocker: building and launching work without the bridge.
+        assert_eq!(report.health(), Health::Warning);
+    }
+
+    #[test]
+    fn a_missing_bridge_plugin_warns_without_blocking() {
+        let root = temp_dir("noplugin");
+        let mut layout = full_layout();
+        // A real directory, empty of the plugin.
+        layout.godot_project = Some(root.join("godot").join("project.godot"));
+        std::fs::create_dir_all(root.join("godot")).expect("create godot directory");
+        std::fs::write(
+            root.join("godot").join("project.godot"),
+            "[editor_plugins]\nenabled=PackedStringArray()\n",
+        )
+        .expect("write project.godot");
+
+        let report = diagnose(&project_with(layout), &full_toolchain(), None);
+        let finding = report.find("editor_plugin").expect("a finding is expected");
+        assert_eq!(finding.health, Health::Warning);
+        assert!(
+            finding.summary.contains("not installed"),
+            "{}",
+            finding.summary
+        );
+        assert!(
+            report.count(Health::Blocked) == 0,
+            "a missing bridge must not block a build"
+        );
     }
 
     #[test]

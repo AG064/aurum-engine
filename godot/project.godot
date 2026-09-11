@@ -29,7 +29,7 @@ window/stretch/aspect="expand"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/aurum/plugin.cfg", "res://addons/godot_mcp_toolkit/plugin.cfg")
+enabled=PackedStringArray("res://addons/aurum/plugin.cfg", "res://addons/aurum_editor/plugin.cfg", "res://addons/godot_mcp_toolkit/plugin.cfg")
 
 [gui]
 
