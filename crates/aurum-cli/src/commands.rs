@@ -803,9 +803,12 @@ pub fn dev(args: &[String]) -> ExitCode {
             .any(|change| aurum_studio_core::reload::rebuild_required(&change.path));
 
         let mut installed = true;
+        let fingerprint_before = editor_live_fingerprint(&project);
+        let mut replaced = false;
         if rebuild {
             match aurum_studio_core::build::run(&request, false, BUILD_TIMEOUT) {
                 Ok(report) if report.replaced => {
+                    replaced = true;
                     println!("  rebuilt: {}", report.summary());
                 }
                 Ok(_) => println!("  rebuilt: no change in the artifact"),
@@ -817,6 +820,13 @@ pub fn dev(args: &[String]) -> ExitCode {
                     eprintln!("  {error}");
                 }
             }
+        }
+
+        // Only asked when the installed library actually changed. A build that
+        // produced identical bytes has nothing to reload, so demanding
+        // evidence for it would report a failure where nothing was attempted.
+        if replaced {
+            report_reload_evidence(&project, fingerprint_before.as_deref(), options.json);
         }
 
         // A verdict is acted on only once the build it implies has landed:
@@ -831,6 +841,69 @@ pub fn dev(args: &[String]) -> ExitCode {
                 options.json,
             );
         }
+    }
+}
+
+/// What the running editor reports about the extension it has loaded.
+///
+/// A rebuild that installs a new library proves a *file* was written. Only the
+/// editor can say whether the new code is the code running, and it says so by
+/// publishing the fingerprint the loaded extension returns — see the
+/// `aurum_editor` plugin. Without that plugin there is no evidence either way,
+/// and the loop says so rather than implying a reload it cannot see.
+///
+/// `None` means the bridge is silent, which is a different report from a
+/// fingerprint that did not change.
+fn editor_live_fingerprint(project: &Project) -> Option<String> {
+    let godot = project.godot_project_dir()?;
+    let path = godot
+        .join(".godot")
+        .join("aurum")
+        .join("live-fingerprint.txt");
+    let text = std::fs::read_to_string(path).ok()?;
+    let text = text.trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+/// Say whether a rebuild was picked up, and be precise about what that means.
+///
+/// The comparison is the point. A fingerprint that changed between builds is
+/// evidence the editor is running the new code. The same fingerprint twice is
+/// *not* evidence of anything, and reporting it as though it were would be the
+/// exact assumption this exists to remove.
+fn report_reload_evidence(project: &Project, before: Option<&str>, json: bool) {
+    let after = editor_live_fingerprint(project);
+    let message = reload_evidence_message(after.as_deref(), before);
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "reload_evidence": message, "fingerprint": after })
+        );
+    } else {
+        println!("  {message}");
+    }
+}
+
+/// The sentence a rebuild earns, given what the editor said before and after.
+///
+/// Separated from the printing so the reasoning can be tested directly. The
+/// distinction it draws is the whole point of the feature: evidence, no
+/// evidence, and *absence* of a bridge are three different situations, and
+/// collapsing them into one cheerful "reloaded" is what this replaces.
+fn reload_evidence_message(after: Option<&str>, before: Option<&str>) -> String {
+    match (after, before) {
+        (Some(now), Some(was)) if now != was => {
+            format!("the editor is running the new build (fingerprint {was} -> {now})")
+        }
+        (Some(now), Some(_)) => format!(
+            "the editor still reports {now}, unchanged, so this is not evidence of a reload; \
+             the fingerprint is fixed at compile time, so a normal edit cannot move it"
+        ),
+        (Some(now), None) => format!("the editor reports {now}"),
+        (None, _) => "the editor bridge is silent, so a reload could not be confirmed; \
+                      run `aurum doctor` to check the aurum_editor plugin"
+            .to_string(),
     }
 }
 
@@ -1147,6 +1220,53 @@ fn command_usage(command: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_changed_fingerprint_is_the_only_thing_that_counts_as_evidence() {
+        let changed = reload_evidence_message(Some("build-2"), Some("build-1"));
+        assert!(
+            changed.contains("running the new build"),
+            "a moved fingerprint is evidence, got '{changed}'"
+        );
+        assert!(changed.contains("build-1") && changed.contains("build-2"));
+    }
+
+    #[test]
+    fn an_unchanged_fingerprint_is_reported_as_no_evidence() {
+        // The honest case, and the common one: the fingerprint is fixed at
+        // compile time, so an ordinary edit leaves it alone. Saying "reloaded"
+        // here would be an assumption dressed as an observation.
+        let same = reload_evidence_message(Some("aurum-unmanaged"), Some("aurum-unmanaged"));
+        assert!(
+            same.contains("not evidence of a reload"),
+            "an unchanged fingerprint proves nothing, got '{same}'"
+        );
+        assert!(
+            !same.contains("running the new build"),
+            "it must not claim a reload it cannot see"
+        );
+    }
+
+    #[test]
+    fn a_silent_bridge_says_so_and_says_what_to_do() {
+        // Absence of the bridge is a third state, distinct from "no evidence":
+        // there is nothing wrong with the build, and the user can fix it.
+        let silent = reload_evidence_message(None, Some("build-1"));
+        assert!(silent.contains("could not be confirmed"), "got '{silent}'");
+        assert!(
+            silent.contains("aurum doctor"),
+            "it should point at the check that explains why, got '{silent}'"
+        );
+    }
+
+    #[test]
+    fn a_first_build_with_a_live_bridge_states_what_the_editor_reports() {
+        // Nothing to compare against yet, so it reports the observation
+        // without dressing it up as a comparison.
+        let first = reload_evidence_message(Some("aurum-unmanaged"), None);
+        assert!(first.contains("aurum-unmanaged"), "got '{first}'");
+        assert!(!first.contains("->"), "there was nothing to compare with");
+    }
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|s| s.to_string()).collect()
