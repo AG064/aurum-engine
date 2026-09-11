@@ -43,6 +43,8 @@ use godot::classes::{ClassDb, Node, PackedScene, ResourceLoader};
 use godot::init::{gdextension, ExtensionLibrary, InitLevel};
 use godot::prelude::*;
 
+mod bridge_socket;
+
 /// Marker type for this GDExtension's entry point.
 pub struct AurumEditorExtension;
 
@@ -64,6 +66,11 @@ pub struct AurumEditor {
     /// Held weakly in spirit: this is a plain reference to a node that Godot
     /// owns, and it is cleared when the editor closes the scene.
     scene_root: Option<Gd<Node>>,
+    /// The socket bridge, when one was started.
+    ///
+    /// Optional because the file pump remains a supported transport: a project
+    /// that has not started a socket keeps working exactly as before.
+    bridge: Option<bridge_socket::BridgeServer>,
 }
 
 #[godot_api]
@@ -72,6 +79,7 @@ impl INode for AurumEditor {
         Self {
             base,
             scene_root: None,
+            bridge: None,
         }
     }
 }
@@ -567,6 +575,97 @@ impl AurumEditor {
             }
         }
         handled
+    }
+
+    /// Start the socket bridge on `127.0.0.1:port`.
+    ///
+    /// A port of zero asks the operating system for a free one, which is the
+    /// only way to run a second editor without guessing what is already
+    /// listening; the chosen port comes back in the reply and is also readable
+    /// from [`AurumEditor::bridge_port`].
+    ///
+    /// The token is required on every request. A socket is reachable by every
+    /// process on this machine, so the bind address is loopback and is not
+    /// configurable — that is the difference between a local tool and an open
+    /// door — and the token is what separates this editor's caller from every
+    /// other program that can open a socket.
+    ///
+    /// Starting a bridge that is already running replaces it, so a caller
+    /// reconnecting after a reload does not have to stop first.
+    #[func]
+    fn start_bridge(&mut self, port: i64, token: GString) -> GString {
+        if token.is_empty() {
+            return failure("the bridge needs a token; an unauthenticated socket is an open door");
+        }
+        let requested = match u16::try_from(port) {
+            Ok(port) => port,
+            Err(_) => return failure(format!("'{port}' is not a valid port")),
+        };
+
+        match bridge_socket::BridgeServer::start(requested, token.to_string()) {
+            Ok(server) => {
+                let bound = server.port();
+                self.bridge = Some(server);
+                success(serde_json::json!({ "port": bound, "host": "127.0.0.1" }))
+            }
+            Err(error) => failure(format!(
+                "could not listen on 127.0.0.1:{requested}: {error}"
+            )),
+        }
+    }
+
+    /// Stop the bridge, if one is running.
+    #[func]
+    fn stop_bridge(&mut self) -> GString {
+        let was_running = self.bridge.take().is_some();
+        success(serde_json::json!({ "stopped": was_running }))
+    }
+
+    /// The port the bridge is listening on, or zero when it is not running.
+    #[func]
+    fn bridge_port(&self) -> i64 {
+        self.bridge
+            .as_ref()
+            .map(|bridge| i64::from(bridge.port()))
+            .unwrap_or(0)
+    }
+
+    /// Run the requests that arrived since the last frame.
+    ///
+    /// Called once per frame by the editor plugin, for the same reason the file
+    /// pump is: the scene tree is not thread-safe, so a request that touches it
+    /// has to run here, on the main thread, rather than on the connection that
+    /// delivered it.
+    ///
+    /// Returns how many were handled.
+    #[func]
+    fn pump_bridge(&mut self) -> i64 {
+        let mut handled = 0i64;
+        // Bounded by construction: the queue refuses work past its ceiling, so
+        // this cannot be made to spin for an unbounded time in one frame.
+        while let Some(job) = self
+            .bridge
+            .as_ref()
+            .and_then(bridge_socket::BridgeServer::take)
+        {
+            let response = self.handle_request(&job.text);
+            // A caller that gave up is not an error; the work was still done.
+            let _ = job.reply.send(response.to_string());
+            handled += 1;
+        }
+        handled
+    }
+
+    /// How many requests are waiting to be run.
+    ///
+    /// Reported so a caller can see the bridge falling behind rather than only
+    /// feeling it as latency.
+    #[func]
+    fn bridge_depth(&self) -> i64 {
+        self.bridge
+            .as_ref()
+            .map(|bridge| bridge.depth() as i64)
+            .unwrap_or(0)
     }
 
     /// The dispatch table. Kept deliberately flat and small: this is the

@@ -43,10 +43,34 @@ func _enter_tree() -> void:
 	scene_changed.connect(_on_scene_changed)
 	_on_scene_changed(get_editor_interface().get_edited_scene_root())
 
+	# The socket bridge is started only when a launcher supplied a token. A
+	# project opened by hand has no token and gets no listener, which is the
+	# right default: opening an editor should not open a port.
+	_start_socket_bridge()
+
 	print("[aurum-editor] ready; requests in ", _request_dir)
 
 
+## Listen for callers that would rather connect than watch a directory.
+##
+## The file pump stays: a project that never starts a socket keeps working
+## exactly as before, and the two transports reach the same dispatcher.
+func _start_socket_bridge() -> void:
+	var token := OS.get_environment("AURUM_BRIDGE_TOKEN")
+	if token.is_empty():
+		return
+	var requested := OS.get_environment("AURUM_BRIDGE_PORT")
+	var port := int(requested) if requested.is_valid_int() else 0
+	var result: Dictionary = JSON.parse_string(_editor.start_bridge(port, token))
+	if result == null or not result.get("ok", false):
+		push_warning("[aurum-editor] socket bridge did not start: %s" % result)
+		return
+	print("[aurum-editor] bridge listening on 127.0.0.1:", result.get("port"))
+
+
 func _exit_tree() -> void:
+	if _editor != null:
+		_editor.stop_bridge()
 	if scene_changed.is_connected(_on_scene_changed):
 		scene_changed.disconnect(_on_scene_changed)
 	if _editor != null:
@@ -58,6 +82,10 @@ func _exit_tree() -> void:
 func _process(_delta: float) -> void:
 	if _editor != null:
 		_editor.pump_requests(_request_dir, _response_dir)
+		# The scene tree is not thread-safe, so requests that arrived on the
+		# socket run here, on the main thread, rather than on the connection
+		# that delivered them.
+		_editor.pump_bridge()
 	_publish_live_fingerprint()
 
 
