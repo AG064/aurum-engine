@@ -803,6 +803,81 @@ fn tool_mesh_lathe(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult {
     ok(mesh_summary(index, &ctx.engine.content().meshes[index]))
 }
 
+fn tool_sprite_slice(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult {
+    let args = Args::new(params)?;
+    let path = ctx.paths.resolve(args.str("path")?)?;
+
+    let image = aurum_content::png::decode_file(&path)
+        .map_err(|e| ToolError::Invalid(format!("could not read '{}': {e}", path.display())))?;
+
+    let cell_width = u32_or(&args, "cell_width", image.width)?;
+    let cell_height = u32_or(&args, "cell_height", image.height)?;
+    if cell_width == 0 || cell_height == 0 {
+        return Err(ToolError::Invalid(
+            "'cell_width' and 'cell_height' must be greater than zero".into(),
+        ));
+    }
+
+    let columns = image.width.div_ceil(cell_width);
+    let rows = image.height.div_ceil(cell_height);
+    let names = args.string_array("names")?;
+
+    let mut regions = Vec::with_capacity((columns * rows) as usize);
+    for row in 0..rows {
+        for column in 0..columns {
+            let rect = aurum_content::Rect {
+                x: column * cell_width,
+                y: row * cell_height,
+                // Clip the last cell to the image edge rather than overrunning.
+                w: cell_width.min(image.width - column * cell_width),
+                h: cell_height.min(image.height - row * cell_height),
+            };
+            let index = (row * columns + column) as usize;
+            let name = names
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| format!("cell_{row}_{column}"));
+            let uv = rect.uv(image.width, image.height);
+            regions.push(json!({
+                "name": name,
+                "rect": rect,
+                "uv": uv,
+            }));
+        }
+    }
+
+    if let Some(Value::String(layout_path)) = args.get("layout_path") {
+        let target = ctx.paths.resolve(layout_path)?;
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                ToolError::Io(format!("could not create '{}': {e}", parent.display()))
+            })?;
+        }
+        let payload = json!({
+            "source": path.display().to_string(),
+            "width": image.width,
+            "height": image.height,
+            "columns": columns,
+            "rows": rows,
+            "regions": regions,
+        });
+        let text =
+            serde_json::to_string_pretty(&payload).map_err(|e| ToolError::Io(e.to_string()))?;
+        std::fs::write(&target, &text)
+            .map_err(|e| ToolError::Io(format!("could not write '{}': {e}", target.display())))?;
+    }
+
+    ok(json!({
+        "source": path.display().to_string(),
+        "width": image.width,
+        "height": image.height,
+        "columns": columns,
+        "rows": rows,
+        "frame_count": regions.len(),
+        "regions": regions,
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // Catalog
 // ---------------------------------------------------------------------------
@@ -1089,6 +1164,26 @@ pub fn catalog() -> Vec<Tool> {
             ),
             read_only: false,
             handler: tool_content_export,
+        },
+        Tool {
+            name: "aurum_sprite_slice",
+            description: "Read a real PNG sprite sheet and slice it into frames. Returns the \
+                          image size, the grid dimensions, and a rect plus normalised UVs for \
+                          every frame. Without cell_width/cell_height the whole image is one \
+                          region. Pass layout_path to also write the layout as JSON. Handles \
+                          every PNG colour type, bit depth, and filter, including transparency.",
+            input_schema: schema(
+                json!({
+                    "path": { "type": "string", "description": "PNG file inside the server root." },
+                    "cell_width": { "type": "integer", "minimum": 1, "description": "Frame width (default: whole image)." },
+                    "cell_height": { "type": "integer", "minimum": 1, "description": "Frame height (default: whole image)." },
+                    "names": { "type": "array", "items": { "type": "string" }, "description": "Optional frame names, in row-major order." },
+                    "layout_path": { "type": "string", "description": "Optional path to write the layout JSON to." }
+                }),
+                json!(["path"]),
+            ),
+            read_only: false,
+            handler: tool_sprite_slice,
         },
         Tool {
             name: "aurum_content_import",
@@ -1782,6 +1877,104 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("no geometry"), "got: {err}");
+    }
+
+    #[test]
+    fn sprite_slice_reads_a_real_png_and_splits_it_into_frames() {
+        let root = temp_root("slice");
+        let paths = PathGuard::new(&root);
+        let mut engine = Engine::new();
+
+        // Write a real PNG to slice, using the crate's own encoder.
+        let mut sheet = aurum_content::sprite::AtlasImage::new(64, 32);
+        for (index, pixel) in sheet.pixels.chunks_exact_mut(4).enumerate() {
+            let column = index % 64;
+            pixel.copy_from_slice(&[(column * 4) as u8, 0, 0, if column < 32 { 255 } else { 0 }]);
+        }
+        std::fs::write(root.join("sheet.png"), sheet.to_png().unwrap()).unwrap();
+
+        let out = call(
+            &mut engine,
+            &paths,
+            "aurum_sprite_slice",
+            json!({"path": "sheet.png", "cell_width": 16, "cell_height": 16, "layout_path": "sheet.json"}),
+        )
+        .unwrap();
+
+        assert_eq!(out["width"], 64);
+        assert_eq!(out["height"], 32);
+        assert_eq!(out["columns"], 4);
+        assert_eq!(out["rows"], 2);
+        assert_eq!(out["frame_count"], 8);
+
+        // The first frame sits at the origin with the requested cell size.
+        let first = &out["regions"][0];
+        assert_eq!(first["rect"]["x"], 0);
+        assert_eq!(first["rect"]["w"], 16);
+        assert_eq!(first["uv"][2].as_f64().unwrap(), 0.25, "16/64");
+
+        // The layout file round-trips as JSON.
+        let written: Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("sheet.json")).unwrap())
+                .unwrap();
+        assert_eq!(written["regions"].as_array().unwrap().len(), 8);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sprite_slice_clips_a_ragged_final_cell() {
+        let root = temp_root("slice-ragged");
+        let paths = PathGuard::new(&root);
+        let mut engine = Engine::new();
+
+        // 20x20 with 8x8 cells: the last column and row are partial.
+        let sheet = aurum_content::sprite::AtlasImage::filled(20, 20, [1, 2, 3, 255]);
+        std::fs::write(root.join("ragged.png"), sheet.to_png().unwrap()).unwrap();
+
+        let out = call(
+            &mut engine,
+            &paths,
+            "aurum_sprite_slice",
+            json!({"path": "ragged.png", "cell_width": 8, "cell_height": 8}),
+        )
+        .unwrap();
+        assert_eq!(out["columns"], 3);
+        assert_eq!(out["frame_count"], 9);
+
+        // Cells beyond the edge are clipped rather than running past the image.
+        let last = &out["regions"][8];
+        assert_eq!(last["rect"]["w"], 4, "20 - 2*8 = 4");
+        assert_eq!(last["rect"]["h"], 4);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sprite_slice_reports_bad_input_and_stays_in_the_root() {
+        let root = temp_root("slice-errors");
+        let paths = PathGuard::new(&root);
+        let mut engine = Engine::new();
+
+        std::fs::write(root.join("not.png"), b"this is not a png").unwrap();
+        let err = call(
+            &mut engine,
+            &paths,
+            "aurum_sprite_slice",
+            json!({"path": "not.png"}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("could not read"), "got: {err}");
+
+        let denied = call(
+            &mut engine,
+            &paths,
+            "aurum_sprite_slice",
+            json!({"path": "../outside.png"}),
+        );
+        assert!(matches!(denied, Err(ToolError::Denied(_))));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

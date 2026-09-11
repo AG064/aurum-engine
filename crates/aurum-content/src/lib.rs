@@ -53,6 +53,7 @@ pub mod gltf;
 pub mod gltf_import;
 pub mod mesh;
 pub mod model;
+pub mod png;
 pub mod scene;
 pub mod sprite;
 
