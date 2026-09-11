@@ -18,7 +18,7 @@ use aurum_studio_core::registry::Registry;
 use aurum_studio_core::reload::{Classification, Verdict};
 use aurum_studio_core::session::Session;
 use aurum_studio_core::supervise::{
-    bridge_environment, launch, stop_session, LaunchRequest, StopOutcome,
+    bridge_environment, launch, stop_session, terminate, LaunchRequest, StopOutcome,
 };
 use aurum_studio_core::toolchain::{discover, discover_godot_to_launch};
 use aurum_studio_core::watch::{Debouncer, Watcher};
@@ -518,6 +518,132 @@ pub fn run(args: &[String]) -> ExitCode {
     match parse(args) {
         Ok(options) => launch_godot(&options, true),
         Err(message) => usage("run", &message),
+    }
+}
+
+/// `aurum restart [project]`
+///
+/// Restart the editor deliberately, for the one case the classifier names: a
+/// change to the native surface — a new `#[func]`, property, signal, or entry
+/// symbol — that cannot be migrated into an editor that is already running.
+/// Everything else reloads, which is why this is exceptional rather than
+/// routine.
+///
+/// "Controlled" is doing real work in that phrase. The editor is asked to close
+/// politely, and if it declines — which is exactly what a window with unsaved
+/// work does — nothing is forced and nothing is started on top of it. A restart
+/// that discarded somebody's open scene to save them a keypress would be a bug
+/// wearing a feature's clothes.
+pub fn restart(args: &[String]) -> ExitCode {
+    let options = match parse(args) {
+        Ok(options) => options,
+        Err(message) => return usage("restart", &message),
+    };
+
+    let (project, godot_project, godot) = match open_for_launch(&options) {
+        Ok(parts) => parts,
+        Err((message, code)) => {
+            eprintln!("aurum: {message}");
+            return code;
+        }
+    };
+
+    let Some(session) = Session::latest_for(&project.root) else {
+        eprintln!(
+            "aurum restart: no session was recorded for {}; start the editor with \
+             `aurum editor` first",
+            project.root.display()
+        );
+        return ExitCode::from(exit::WARNING);
+    };
+
+    // Only editors. A game is not part of this decision, and stopping one here
+    // would make a restart of the editor also interrupt play, which is a
+    // surprise rather than a feature.
+    let editors: Vec<OwnershipRecord> = OwnershipRecord::read_all(&session.ownership_directory())
+        .into_iter()
+        .filter(|record| record.kind == ProcessKind::Editor)
+        .collect();
+
+    if editors.is_empty() {
+        eprintln!(
+            "aurum restart: no editor is running for session {}; there is nothing to restart",
+            session.id
+        );
+        return ExitCode::from(exit::WARNING);
+    }
+
+    let mut closed = true;
+    let mut stopped = Vec::new();
+    for record in &editors {
+        match terminate(record, options.force, STOP_TIMEOUT) {
+            StopOutcome::Stopped | StopOutcome::NotRunning => {
+                let _ = record.remove(&session.ownership_directory());
+                stopped.push(record.pid);
+                if !options.json {
+                    println!("  stopped the editor (pid {})", record.pid);
+                }
+            }
+            other => {
+                closed = false;
+                if !options.json {
+                    println!("  {}", other.describe(ProcessKind::Editor));
+                }
+            }
+        }
+    }
+
+    if !closed {
+        // The important part. Starting a second editor over one that would not
+        // close is how a project ends up with two of them holding the same
+        // files, so nothing is started until the old one is known to be gone.
+        eprintln!(
+            "aurum restart: the editor did not close, so nothing was started over it; \
+             save your work and try again, or pass --force to discard it"
+        );
+        return ExitCode::from(exit::FAILED);
+    }
+
+    // Started again in the same session, so ownership records keep landing in
+    // one place and a later `aurum stop` still finds everything.
+    let mut request = LaunchRequest::godot(&godot, &godot_project, &project.root);
+    request.kind = ProcessKind::Editor;
+    request.environment = bridge_environment(&session, None);
+
+    match launch(&request, &session) {
+        Ok(launched) => {
+            if options.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "restarted": true,
+                        "session": session.id,
+                        "stopped": stopped,
+                        "pid": launched.pid(),
+                        "kind": launched.record.kind.label(),
+                        "project": project.root.display().to_string(),
+                        "log": session.log_path().display().to_string(),
+                    })
+                );
+            } else {
+                println!(
+                    "restarted the editor (pid {} -> {})",
+                    stopped
+                        .iter()
+                        .map(u32::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    launched.pid()
+                );
+                println!("  log: {}", session.log_path().display());
+            }
+            ExitCode::from(exit::OK)
+        }
+        Err(error) => {
+            eprintln!("aurum restart: the editor was stopped but could not be started again");
+            eprintln!("  {error}");
+            ExitCode::from(exit::FAILED)
+        }
     }
 }
 
