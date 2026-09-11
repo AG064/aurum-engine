@@ -1,0 +1,177 @@
+/* Aurum Studio's page.
+   Godot renders the game; this only has to be legible while it does. */
+
+:root {
+  --bg: #14161a;
+  --panel: #1c1f25;
+  --edge: #2b3038;
+  --ink: #e6e9ee;
+  --muted: #8b94a3;
+  --accent: #d4a24c;
+  --good: #6fbf73;
+  --bad: #e0685f;
+  --warn: #d4a24c;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--edge);
+}
+
+h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+h1 span {
+  color: var(--accent);
+  margin-left: 5px;
+  font-weight: 300;
+}
+
+.project { color: var(--muted); }
+
+.connection {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.connection::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: var(--muted);
+  vertical-align: middle;
+}
+
+.connection[data-state="open"]::before { background: var(--good); }
+.connection[data-state="closed"]::before { background: var(--bad); }
+
+main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 16px 20px;
+  align-items: start;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.panel.wide { grid-column: 1 / -1; }
+
+h2 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+h2:not(:first-child) { margin-top: 18px; }
+
+.buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+
+button {
+  background: #262b33;
+  color: var(--ink);
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 7px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover { border-color: var(--accent); }
+button:active { background: #2f353f; }
+button.warn:hover { border-color: var(--bad); }
+
+button.small {
+  padding: 2px 8px;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: 8px;
+}
+
+.note { color: var(--muted); min-height: 1.2em; margin: 12px 0 0; }
+
+.muted { color: var(--muted); }
+
+.verdict {
+  display: inline-block;
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: #262b33;
+}
+
+/* These class names are the labels `Health::label()` emits, which is what the
+   page receives over the event stream. A test in assets.rs keeps them in step. */
+.verdict.ok { color: var(--good); }
+.verdict.warning { color: var(--warn); }
+.verdict.blocked { color: var(--bad); }
+
+.summary { margin-top: 6px; color: var(--muted); }
+
+.log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 46vh;
+  overflow-y: auto;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12.5px;
+}
+
+.log li { display: flex; gap: 10px; padding: 1px 0; }
+
+.log time { color: #5d6673; flex: none; }
+.log .good span { color: var(--good); }
+.log .bad span { color: var(--bad); }
+.log .note span { color: var(--muted); }
+
+footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--edge);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+footer span { margin-right: auto; }
+
+@media (max-width: 720px) {
+  main { grid-template-columns: 1fr; }
+}

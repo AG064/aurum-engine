@@ -139,7 +139,40 @@ aurum mcp --root . --read-only
 
 # Phase 0 hot-reload development loop
 pwsh scripts/dev.ps1
+
+# The Studio shell: a local page that drives the same supervisor
+aurum studio
 ```
+
+## The Studio shell
+
+`aurum studio` starts a small local server and opens it. It drives the same
+supervisor the CLI does — one orchestration, two front ends — so anything the
+page can do, `aurum doctor`, `aurum build`, `aurum editor`, and `aurum stop` can
+do, and the reverse.
+
+It is a page rather than a native window for two reasons. A toolkit such as
+`eframe` would pull in well over a hundred crates, every one of them code
+running with your privileges; this costs none. And a plain HTTP surface is
+drivable by tests, by scripts, and by an AI, where a window is drivable only by
+a person.
+
+Three things keep a server on your own machine from becoming a way for
+something else to run commands on it:
+
+1. It binds `127.0.0.1` and nothing else. That is not configurable, because it
+   is the difference between a local tool and an open door.
+2. Every request needs a session token — 256 bits from the operating system's
+   generator — compared in constant time. It is printed in the URL so the
+   browser can be opened at it; the page then moves it into `sessionStorage`
+   and strips it from the address bar, so it does not linger in history.
+3. The `Host` header must be a loopback literal. A hostile page can point its
+   own domain at `127.0.0.1`, and the browser will then send requests here
+   carrying that domain; refusing a non-loopback `Host` ends that before the
+   token is even considered.
+
+Useful flags: `--port <n>` to fix the port, `--no-open` to start without a
+browser, `--json` to print the address as data for a script to read.
 
 ## Principles
 

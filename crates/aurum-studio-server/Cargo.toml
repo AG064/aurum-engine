@@ -1,0 +1,16 @@
+[package]
+name = "aurum-studio-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Aurum Studio's local shell: a loopback-only HTTP and event-stream server, written on std::net with no web framework."
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+aurum-studio-core = { path = "../aurum-studio-core" }
+# Already present in the workspace lock, so these add no new packages.
+serde = { workspace = true }
+serde_json = { workspace = true }

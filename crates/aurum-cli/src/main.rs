@@ -26,6 +26,9 @@ COMMANDS:
     editor [project]      Launch Godot on the project, supervised.
     run [project]         Launch the project's game, supervised.
     stop [project]        Stop the processes this project's session launched.
+    studio [project]      Start the local Studio shell and open it in a
+                          browser. Loopback only; every request needs the
+                          session token. See `aurum studio --help`.
     import <path>         Register a project (read-only against the project).
     projects              List registered projects.
     forget <name|path>    Remove a project from the registry.
@@ -54,6 +57,7 @@ fn main() -> ExitCode {
         Some("editor") => commands::editor(&args[1..]),
         Some("run") => commands::run(&args[1..]),
         Some("stop") => commands::stop(&args[1..]),
+        Some("studio") => commands::studio(&args[1..]),
         Some("import") => commands::import(&args[1..]),
         Some("projects") => commands::projects(&args[1..]),
         Some("forget") => commands::forget(&args[1..]),

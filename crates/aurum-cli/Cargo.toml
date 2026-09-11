@@ -17,4 +17,5 @@ path = "src/main.rs"
 aurum-core = { path = "../aurum-core" }
 aurum-mcp = { path = "../aurum-mcp" }
 aurum-studio-core = { path = "../aurum-studio-core" }
+aurum-studio-server = { path = "../aurum-studio-server" }
 serde_json = { workspace = true }

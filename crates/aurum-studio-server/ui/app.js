@@ -1,0 +1,194 @@
+// Aurum Studio's page.
+//
+// The token arrives in the URL, because opening a browser at a URL is the only
+// way to hand it over without a login step. It is moved into sessionStorage and
+// stripped from the address bar immediately, so it does not persist in history
+// and cannot leak through a Referer header. The page itself never contains the
+// token: the server refuses to bake it in.
+
+(function () {
+  'use strict';
+
+  const TOKEN_KEY = 'aurum_token';
+
+  // Take the token from the URL once, then get it out of sight.
+  const params = new URLSearchParams(window.location.search);
+  const fromUrl = params.get('t');
+  if (fromUrl) {
+    sessionStorage.setItem(TOKEN_KEY, fromUrl);
+    params.delete('t');
+    const query = params.toString();
+    window.history.replaceState(
+      {},
+      '',
+      window.location.pathname + (query ? '?' + query : '')
+    );
+  }
+  const token = sessionStorage.getItem(TOKEN_KEY) || '';
+
+  const $ = (id) => document.getElementById(id);
+  const connection = $('connection');
+  const log = $('log');
+  const health = $('health');
+  const busy = $('busy');
+  const project = $('project');
+
+  const MAX_LINES = 500;
+
+  function say(text, kind) {
+    const line = document.createElement('li');
+    if (kind) line.className = kind;
+    const time = document.createElement('time');
+    time.textContent = new Date().toLocaleTimeString();
+    const body = document.createElement('span');
+    body.textContent = text;
+    line.append(time, body);
+
+    const atBottom =
+      log.scrollTop + log.clientHeight >= log.scrollHeight - 24;
+    log.append(line);
+    while (log.childElementCount > MAX_LINES) log.removeChild(log.firstChild);
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  }
+
+  function setState(state, label) {
+    connection.dataset.state = state;
+    connection.textContent = label;
+  }
+
+  async function post(path, body) {
+    return fetch(path, {
+      method: 'POST',
+      headers: {
+        'X-Aurum-Token': token,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body || {}),
+    });
+  }
+
+  // -- commands ----------------------------------------------------------
+
+  document.querySelectorAll('button[data-command]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const command = button.dataset.command;
+      const extra = button.dataset.args ? JSON.parse(button.dataset.args) : {};
+      busy.textContent = command + ' requested';
+      try {
+        const response = await post('/api/command', {
+          command,
+          ...extra,
+        });
+        if (!response.ok) {
+          say(await response.text(), 'bad');
+          busy.textContent = '';
+        }
+      } catch (error) {
+        say('could not reach Studio: ' + error, 'bad');
+        busy.textContent = '';
+      }
+    });
+  });
+
+  $('clear').addEventListener('click', () => {
+    log.replaceChildren();
+  });
+
+  $('shutdown').addEventListener('click', async () => {
+    setState('closed', 'stopped');
+    try {
+      await post('/api/stop');
+    } catch (error) {
+      /* The server may close the connection before answering. */
+    }
+    say('Studio has been asked to shut down. The page can be closed.', 'note');
+  });
+
+  // -- events ------------------------------------------------------------
+
+  function renderHealth(event) {
+    health.replaceChildren();
+    const verdict = document.createElement('div');
+    verdict.className = 'verdict ' + event.verdict;
+    verdict.textContent = event.verdict;
+    const summary = document.createElement('div');
+    summary.className = 'summary';
+    summary.textContent = event.summary;
+    health.append(verdict, summary);
+  }
+
+  function handle(event) {
+    switch (event.kind) {
+      case 'health':
+        renderHealth(event);
+        say('health: ' + event.verdict + ' — ' + event.summary);
+        break;
+      case 'build-started':
+        busy.textContent = 'building ' + event.package + ' (' + event.profile + ')';
+        say('building ' + event.package + ' (' + event.profile + ')', 'note');
+        break;
+      case 'build-finished':
+        busy.textContent = '';
+        say(
+          (event.ok ? 'build ok: ' : 'build failed: ') + event.summary,
+          event.ok ? 'good' : 'bad'
+        );
+        break;
+      case 'process-started':
+        say(event.process + ' started (pid ' + event.pid + ')', 'good');
+        break;
+      case 'process-stopped':
+        say(event.process + ': ' + event.description);
+        break;
+      case 'change':
+        say(event.verdict + ': ' + event.reason);
+        break;
+      case 'log':
+        say(event.line);
+        break;
+      case 'error':
+        busy.textContent = '';
+        say(event.message, 'bad');
+        break;
+      case 'stopped':
+        setState('closed', 'stopped');
+        say('Studio stopped.', 'note');
+        break;
+      default:
+        say(JSON.stringify(event));
+    }
+  }
+
+  function connect() {
+    setState('connecting', 'connecting');
+    const stream = new EventSource('/api/events?t=' + encodeURIComponent(token));
+
+    stream.onopen = () => setState('open', 'connected');
+    stream.onerror = () => {
+      // EventSource retries on its own; report it rather than giving up.
+      setState('connecting', 'reconnecting');
+    };
+    stream.onmessage = (message) => {
+      let event;
+      try {
+        event = JSON.parse(message.data);
+      } catch (error) {
+        return;
+      }
+      handle(event);
+    };
+  }
+
+  // A snapshot first, so the page has something to show before the first
+  // event arrives.
+  fetch('/api/state', { headers: { 'X-Aurum-Token': token } })
+    .then((response) => response.json())
+    .then((state) => {
+      project.textContent = state.project || 'project';
+      say('Studio ' + state.studio + ' ready.');
+    })
+    .catch(() => {
+      project.textContent = 'project';
+    })
+    .finally(connect);
+})();

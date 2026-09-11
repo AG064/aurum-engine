@@ -21,6 +21,7 @@ use aurum_studio_core::supervise::{
 use aurum_studio_core::toolchain::{discover, discover_godot_to_launch};
 use aurum_studio_core::watch::{Debouncer, Watcher};
 use aurum_studio_core::Project;
+use aurum_studio_server::{Server, ServerConfig};
 
 /// Exit codes callers branch on. Distinguishing "unhealthy" from "broken
 /// invocation" is what lets a script act on the result rather than parse text.
@@ -43,6 +44,8 @@ struct Options {
     once: bool,
     no_editor: bool,
     interval_ms: u64,
+    port: u16,
+    no_open: bool,
     positional: Vec<String>,
 }
 
@@ -61,6 +64,16 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--force" => options.force = true,
             "--once" => options.once = true,
             "--no-editor" => options.no_editor = true,
+            "--no-open" => options.no_open = true,
+            "--port" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--port requires a number".to_string())?;
+                options.port = value
+                    .parse()
+                    .map_err(|_| format!("'{value}' is not a port number"))?;
+            }
             "--interval" => {
                 index += 1;
                 let value = args
@@ -109,6 +122,94 @@ fn target(options: &Options) -> PathBuf {
         .clone()
         .or_else(|| options.positional.first().map(PathBuf::from))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+/// Open a URL in the desktop's default browser.
+///
+/// Best effort by design: the address has already been printed, so a machine
+/// with no browser — a build server, a container — loses nothing but the
+/// convenience, and it is told why.
+fn open_browser(url: &str) {
+    #[cfg(windows)]
+    // The empty argument is the window title: `start` treats a first quoted
+    // argument as the title, so without it the URL would be swallowed.
+    let opened = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn();
+
+    #[cfg(target_os = "macos")]
+    let opened = std::process::Command::new("open").arg(url).spawn();
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let opened = std::process::Command::new("xdg-open").arg(url).spawn();
+
+    if let Err(error) = opened {
+        eprintln!("aurum: could not open a browser ({error}); open the address above");
+    }
+}
+
+/// `aurum studio [project]`
+///
+/// Starts the local shell and, unless asked not to, opens it.
+///
+/// The server binds the loopback interface and nothing else, and every request
+/// must carry the session token, so starting Studio does not open a port to
+/// the network or to another page in the browser.
+pub fn studio(args: &[String]) -> ExitCode {
+    let options = match parse(args) {
+        Ok(options) => options,
+        Err(message) => return usage("studio", &message),
+    };
+
+    let path = target(&options);
+    let project = match Project::open(&path) {
+        Ok(project) => project,
+        Err(error) => {
+            eprintln!("aurum: {error}");
+            return ExitCode::from(exit::FAILED);
+        }
+    };
+
+    let mut config = ServerConfig::new(project);
+    config.port = options.port;
+    config.godot_hint = options.godot.clone();
+
+    let server = match Server::bind(config) {
+        Ok(server) => server,
+        Err(error) => {
+            eprintln!(
+                "aurum: could not listen on 127.0.0.1:{}: {error}",
+                options.port
+            );
+            return ExitCode::from(exit::FAILED);
+        }
+    };
+
+    let url = server.url();
+
+    if options.json {
+        // A machine is driving, so the address goes to stdout as data and no
+        // browser is opened.
+        println!(
+            "{}",
+            serde_json::json!({
+                "url": url,
+                "port": server.port(),
+                "host": "127.0.0.1",
+            })
+        );
+    } else {
+        println!("aurum studio is listening on 127.0.0.1:{}", server.port());
+        println!("  open: {url}");
+        println!("  this address carries a session token; treat it like a password");
+        println!("  press Ctrl+C, or use the button on the page, to stop");
+        if !options.no_open {
+            open_browser(&url);
+        }
+    }
+
+    server.serve();
+    ExitCode::from(exit::OK)
 }
 
 /// `aurum doctor [project]`
