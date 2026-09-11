@@ -197,9 +197,9 @@ impl Response {
                 "the change needs the running game restarted, but this session has none running"
                     .to_string()
             }
-            Self::EditorRestartRequired { reason } => format!(
-                "editor restart required: {reason}; nothing was restarted automatically"
-            ),
+            Self::EditorRestartRequired { reason } => {
+                format!("editor restart required: {reason}; nothing was restarted automatically")
+            }
         }
     }
 }
@@ -313,7 +313,10 @@ mod tests {
         );
         match &response {
             Response::Game(Restart::Restarted { stopped, started }) => {
-                assert_eq!(*stopped, first, "the game that stopped should be the old one");
+                assert_eq!(
+                    *stopped, first,
+                    "the game that stopped should be the old one"
+                );
                 assert_ne!(*started, first, "the replacement should be a new process");
             }
             other => panic!("expected the game to be replaced, got {other:?}"),
@@ -344,10 +347,8 @@ mod tests {
         let first = game.running.as_ref().unwrap().pid;
 
         let source = "impl X { #[func] fn go(&self) {} }";
-        let classification = classify_change(
-            Path::new("crates/aurum-godot/src/lib.rs"),
-            Some(source),
-        );
+        let classification =
+            classify_change(Path::new("crates/aurum-godot/src/lib.rs"), Some(source));
         assert_eq!(classification.verdict, Verdict::EditorRestart);
 
         let response = respond(
@@ -502,7 +503,11 @@ mod tests {
     fn a_restart_after_the_game_already_exited_starts_a_fresh_one() {
         let (root, _session, editor, mut game) = scene("exited");
         let first = game.running.as_ref().unwrap().pid;
-        let _ = terminate(game.running.as_ref().unwrap(), true, Duration::from_secs(30));
+        let _ = terminate(
+            game.running.as_ref().unwrap(),
+            true,
+            Duration::from_secs(30),
+        );
 
         let classification = classify_path(Path::new("godot/project.godot"));
         let response = respond(

@@ -327,7 +327,10 @@ mod tests {
         // already stopped.
         record.remove(&dir).unwrap();
         assert!(!path.exists());
-        assert!(record.remove(&dir).is_err(), "removing twice is not a promise");
+        assert!(
+            record.remove(&dir).is_err(),
+            "removing twice is not a promise"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

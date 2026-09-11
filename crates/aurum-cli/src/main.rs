@@ -25,6 +25,8 @@ COMMANDS:
                           leaves the installed library untouched.
     editor [project]      Launch Godot on the project, supervised.
     run [project]         Launch the project's game, supervised.
+    new <path>            Make a project from a template. Refuses to write
+                          into a directory that already has anything in it.
     stop [project]        Stop the processes this project's session launched.
     restart [project]     Restart the editor, for a native structural change
                           that cannot be migrated live. Asks politely; refuses
@@ -62,6 +64,7 @@ fn main() -> ExitCode {
         Some("run") => commands::run(&args[1..]),
         Some("stop") => commands::stop(&args[1..]),
         Some("restart") => commands::restart(&args[1..]),
+        Some("new") => commands::new(&args[1..]),
         Some("studio") => commands::studio(&args[1..]),
         Some("import") => commands::import(&args[1..]),
         Some("projects") => commands::projects(&args[1..]),

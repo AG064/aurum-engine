@@ -647,6 +647,125 @@ pub fn restart(args: &[String]) -> ExitCode {
     }
 }
 
+/// Where the running binary's own checkout is.
+///
+/// The generated workspace refers to the engine by path, and the only path
+/// anybody can be sure of is the one this binary was run from. Walking out of
+/// `target/<profile>/` finds it without asking, which matters because the
+/// person running `aurum new` has not got a project yet to hold the answer.
+fn engine_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    // .../target/debug/aurum.exe -> .../target/debug -> .../target -> ...
+    exe.parent()?.parent()?.parent().map(Path::to_path_buf)
+}
+
+/// `aurum new <path> [--name <name>] [--template <name>] [--engine <path>]`
+///
+/// Make a project. Refuses to write into a directory that already has anything
+/// in it, because this is run once, at the start, usually against a path
+/// somebody typed from memory.
+pub fn new(args: &[String]) -> ExitCode {
+    let mut path: Option<PathBuf> = None;
+    let mut name: Option<String> = None;
+    let mut template = aurum_studio_core::templates::DEFAULT_TEMPLATE.to_string();
+    let mut engine = engine_root();
+    let mut json = false;
+
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index].as_str();
+        let mut value = |what: &str| -> Option<String> {
+            index += 1;
+            match args.get(index) {
+                Some(value) => Some(value.clone()),
+                None => {
+                    eprintln!("aurum new: {argument} requires {what}");
+                    None
+                }
+            }
+        };
+        match argument {
+            "--json" => json = true,
+            "--name" => match value("a name") {
+                Some(v) => name = Some(v),
+                None => return ExitCode::from(exit::USAGE),
+            },
+            "--template" => match value("a template name") {
+                Some(v) => template = v,
+                None => return ExitCode::from(exit::USAGE),
+            },
+            "--engine" => match value("a path") {
+                Some(v) => engine = Some(PathBuf::from(v)),
+                None => return ExitCode::from(exit::USAGE),
+            },
+            "-h" | "--help" => return usage("new", "help"),
+            other if other.starts_with('-') => {
+                eprintln!("aurum new: unknown option '{other}'");
+                return ExitCode::from(exit::USAGE);
+            }
+            other => path = Some(PathBuf::from(other)),
+        }
+        index += 1;
+    }
+
+    let Some(root) = path else {
+        eprintln!("aurum new: which directory? e.g. `aurum new ./my-game`");
+        return ExitCode::from(exit::USAGE);
+    };
+
+    // The directory's own name is the obvious default, and asking for it again
+    // would be a question with only one sensible answer.
+    let name = name.unwrap_or_else(|| {
+        root.file_name()
+            .map(|part| part.to_string_lossy().to_string())
+            .unwrap_or_default()
+    });
+
+    let Some(engine) = engine else {
+        eprintln!("aurum new: could not work out where the engine is; pass --engine <path>");
+        return ExitCode::from(exit::FAILED);
+    };
+
+    let request = aurum_studio_core::templates::NewProject {
+        name,
+        template,
+        engine,
+    };
+
+    match aurum_studio_core::templates::create(&root, &request) {
+        Ok(created) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "root": created.root.display().to_string(),
+                        "name": created.name,
+                        "template": created.template,
+                        "files": created
+                            .files
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>(),
+                    })
+                );
+            } else {
+                println!("{}", created.describe());
+                for file in &created.files {
+                    println!("  {}", file.display());
+                }
+                println!("\nnext:");
+                println!("  cd {}", created.root.display());
+                println!("  aurum doctor");
+            }
+            ExitCode::from(exit::OK)
+        }
+        Err(error) => {
+            eprintln!("aurum new: {error}");
+            ExitCode::from(exit::FAILED)
+        }
+    }
+}
+
 /// `aurum stop [project]`
 ///
 /// Stops only processes this project's most recent session launched, and only

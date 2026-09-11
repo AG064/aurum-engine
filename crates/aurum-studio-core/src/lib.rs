@@ -53,6 +53,7 @@ pub mod reload;
 pub mod session;
 pub mod supervise;
 pub mod supervisor;
+pub mod templates;
 pub mod toml;
 pub mod toolchain;
 pub mod watch;
