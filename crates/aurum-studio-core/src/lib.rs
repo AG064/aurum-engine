@@ -20,6 +20,7 @@
 //! - [`doctor`] — healthy, warning, and blocked findings, with evidence
 //! - [`build`] — building the extension and installing it safely
 //! - [`process`] — running children with capture and a bounded wait
+//! - [`ownership`] — proving a process is the one Studio launched
 //! - [`hash`] — SHA-256, for verifying artifacts
 //!
 //! ## Dependency policy
@@ -35,6 +36,7 @@
 pub mod build;
 pub mod doctor;
 pub mod hash;
+pub mod ownership;
 pub mod process;
 pub mod project;
 pub mod registry;
@@ -44,6 +46,7 @@ pub mod toolchain;
 pub use build::{BuildError, BuildReport, BuildRequest, Profile};
 pub use doctor::{Finding, Health, Report};
 pub use hash::{sha256_file, sha256_hex, Sha256};
+pub use ownership::{LiveProcess, OwnershipRecord, ProcessKind};
 pub use process::{Command, Outcome};
 pub use project::{clean_path, ConfigError, Layout, Project, ProjectConfig};
 pub use registry::{Entry, Registry, RegistryError};

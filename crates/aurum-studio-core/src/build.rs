@@ -715,7 +715,11 @@ mod tests {
         // produce different bytes without touching the fake itself.
         let payload = dir.join("payload.bin");
         #[cfg(windows)]
-        let body = format!("copy /Y \"{}\" \"{}\" > NUL", payload.display(), artifact.display());
+        let body = format!(
+            "copy /Y \"{}\" \"{}\" > NUL",
+            payload.display(),
+            artifact.display()
+        );
         #[cfg(not(windows))]
         let body = format!("cp \"{}\" \"{}\"", payload.display(), artifact.display());
         let request = request_for(&dir, fake_cargo(&dir, &body));
