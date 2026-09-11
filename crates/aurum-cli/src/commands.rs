@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use aurum_studio_core::build::{library_name, BuildRequest, Profile};
 use aurum_studio_core::doctor::{diagnose, Health};
 use aurum_studio_core::registry::Registry;
 use aurum_studio_core::toolchain::discover;
@@ -29,6 +30,8 @@ struct Options {
     project: Option<PathBuf>,
     godot: Option<PathBuf>,
     json: bool,
+    release: bool,
+    force: bool,
     positional: Vec<String>,
 }
 
@@ -40,6 +43,8 @@ fn parse(args: &[String]) -> Result<Options, String> {
         let argument = args[index].as_str();
         match argument {
             "--json" => options.json = true,
+            "--release" => options.release = true,
+            "--force" => options.force = true,
             "--godot" => {
                 index += 1;
                 let value = args
@@ -125,6 +130,127 @@ pub fn doctor(args: &[String]) -> ExitCode {
         Health::Blocked => ExitCode::from(exit::BLOCKED),
     }
 }
+
+/// `aurum build [project]`
+///
+/// Builds the extension and installs it. The destination is only touched once
+/// a verified artifact is staged, so a failure here cannot damage the library
+/// Godot is using.
+pub fn build(args: &[String]) -> ExitCode {
+    let options = match parse(args) {
+        Ok(options) => options,
+        Err(message) => return usage("build", &message),
+    };
+    let path = target(&options);
+
+    let project = match Project::open(&path) {
+        Ok(project) => project,
+        Err(error) => {
+            eprintln!("aurum build: {error}");
+            return ExitCode::from(exit::BLOCKED);
+        }
+    };
+
+    // A build needs a package to build and an add-on to install into.
+    let Some(package) = project.config.rust_package.clone() else {
+        eprintln!("aurum build: aurum.toml has no 'rust_package'; there is nothing to build");
+        return ExitCode::from(exit::USAGE);
+    };
+    let Some(addon) = project.layout.addon_directory.clone() else {
+        eprintln!(
+            "aurum build: no Aurum add-on directory found; set addon_destination in aurum.toml"
+        );
+        return ExitCode::from(exit::BLOCKED);
+    };
+
+    let toolchain = discover(&project, options.godot.as_deref());
+    let Some(cargo) = toolchain.cargo.as_ref().map(|tool| tool.path.clone()) else {
+        eprintln!("aurum build: Cargo was not found on PATH");
+        return ExitCode::from(exit::BLOCKED);
+    };
+
+    let profile = if options.release {
+        Profile::Release
+    } else {
+        Profile::Debug
+    };
+    let library = library_name(&package);
+    let destination = addon.join("bin").join(profile.installed_filename(&library));
+
+    let request = BuildRequest::new(&project.root, &package, profile, &destination, cargo);
+
+    if !options.json {
+        println!(
+            "building {} ({}) -> {}",
+            package,
+            if profile.is_debug() {
+                "debug"
+            } else {
+                "release"
+            },
+            destination.display()
+        );
+    }
+
+    match aurum_studio_core::build::run(&request, options.force, BUILD_TIMEOUT) {
+        Ok(report) => {
+            if options.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "package": package,
+                        "profile": if profile.is_debug() { "debug" } else { "release" },
+                        "built": report.built,
+                        "replaced": report.replaced,
+                        "source": report.source.path.display().to_string(),
+                        "source_sha256": report.source.sha256,
+                        "installed": report.installed.path.display().to_string(),
+                        "installed_sha256": report.installed.sha256,
+                        "bytes": report.installed.bytes,
+                    })
+                );
+            } else {
+                println!("{}", report.summary());
+                println!("  sha256: {}", report.installed.sha256);
+                // Compiler warnings are worth surfacing on a successful build.
+                for line in report.output.lines().filter(|l| l.starts_with("warning")) {
+                    println!("  {line}");
+                }
+            }
+            ExitCode::from(exit::OK)
+        }
+        Err(error) => {
+            // The previously installed library is still in place; say so,
+            // because that is what decides whether the user can keep working.
+            if options.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "package": package,
+                        "ok": false,
+                        "error": error.to_string(),
+                        "installed_unchanged": destination.is_file(),
+                    })
+                );
+            } else {
+                eprintln!("aurum build: {error}");
+                if destination.is_file() {
+                    eprintln!(
+                        "the previously installed library is unchanged at {}",
+                        destination.display()
+                    );
+                }
+            }
+            ExitCode::from(exit::FAILED)
+        }
+    }
+}
+
+/// How long a build may take before it is killed.
+///
+/// Generous: a cold dependency build is slow, and killing it would be worse
+/// than waiting.
+const BUILD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// `aurum projects`
 pub fn projects(args: &[String]) -> ExitCode {
@@ -299,6 +425,12 @@ fn command_usage(command: &str) -> &'static str {
              exit 0 healthy, 1 warning, 2 blocked"
         }
         "projects" => "usage: aurum projects [--json]",
+        "build" => {
+            "usage: aurum build [project] [--release] [--force] [--json]\n\
+             \n\
+             Builds the GDExtension and installs it. A failed build leaves the\n\
+             installed library untouched."
+        }
         "import" => "usage: aurum import <project-path> [--json]",
         "forget" => "usage: aurum forget <name-or-path>",
         _ => "usage: aurum <command>",

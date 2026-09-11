@@ -18,7 +18,9 @@
 //! - [`project`] — configuration and read-only project discovery
 //! - [`toolchain`] — finding Cargo, rustc, and Godot
 //! - [`doctor`] — healthy, warning, and blocked findings, with evidence
+//! - [`build`] — building the extension and installing it safely
 //! - [`process`] — running children with capture and a bounded wait
+//! - [`hash`] — SHA-256, for verifying artifacts
 //!
 //! ## Dependency policy
 //!
@@ -30,14 +32,18 @@
 //! is small enough that a focused reader is both smaller and more explicit
 //! about what it refuses.
 
+pub mod build;
 pub mod doctor;
+pub mod hash;
 pub mod process;
 pub mod project;
 pub mod registry;
 pub mod toml;
 pub mod toolchain;
 
+pub use build::{BuildError, BuildReport, BuildRequest, Profile};
 pub use doctor::{Finding, Health, Report};
+pub use hash::{sha256_file, sha256_hex, Sha256};
 pub use process::{Command, Outcome};
 pub use project::{clean_path, ConfigError, Layout, Project, ProjectConfig};
 pub use registry::{Entry, Registry, RegistryError};

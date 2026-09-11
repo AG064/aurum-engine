@@ -19,6 +19,8 @@ USAGE:
 COMMANDS:
     doctor [project]      Check a project and report healthy, warning, or
                           blocked state with evidence.
+    build [project]       Build the GDExtension and install it. A failed build
+                          leaves the installed library untouched.
     import <path>         Register a project (read-only against the project).
     projects              List registered projects.
     forget <name|path>    Remove a project from the registry.
@@ -42,6 +44,7 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("mcp") => ExitCode::from(aurum_mcp::cli::run(&args[1..]) as u8),
         Some("doctor") => commands::doctor(&args[1..]),
+        Some("build") => commands::build(&args[1..]),
         Some("import") => commands::import(&args[1..]),
         Some("projects") => commands::projects(&args[1..]),
         Some("forget") => commands::forget(&args[1..]),
