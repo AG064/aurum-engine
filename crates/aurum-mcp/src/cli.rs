@@ -25,6 +25,12 @@ OPTIONS:
     --root <DIR>    Directory that aurum_save and aurum_load may write inside.
                     Defaults to the current working directory.
     --read-only     Refuse mutating tools and omit them from tools/list.
+    --deny <names>  Withhold the named tools. Repeatable, and accepts a
+                    comma-separated list. A withheld tool is refused and
+                    omitted from tools/list, so a client never sees one it
+                    cannot use. aurum_mcp_status is never withheld, because
+                    a client that cannot ask what is missing cannot tell a
+                    refusal from a typo.
     --trace         Echo protocol traffic to stderr.
     --editor-bridge <DIR>
                     Directory the Aurum Editor plugin polls, enabling the
@@ -67,6 +73,19 @@ pub fn parse_args_slice(args: &[String]) -> Result<Option<Options>, String> {
             }
             "--read-only" => config.read_only = true,
             "--trace" => config.trace = true,
+            "--deny" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--deny requires a tool name".to_string())?;
+                // Accepted comma-separated as well as repeated, because a
+                // caller scripting this usually has a list rather than a loop.
+                for name in value.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+                    if !config.denied.iter().any(|d| d == name) {
+                        config.denied.push(name.to_string());
+                    }
+                }
+            }
             "--editor-bridge" => {
                 index += 1;
                 let value = args

@@ -1319,6 +1319,8 @@ mod tests {
             engine,
             paths,
             editor_bridge: None,
+            read_only: false,
+            denied: &[],
         };
         (tool.handler)(&mut ctx, &args)
     }

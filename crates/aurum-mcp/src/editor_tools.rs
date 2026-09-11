@@ -280,6 +280,8 @@ mod tests {
             engine,
             paths,
             editor_bridge: bridge,
+            read_only: false,
+            denied: &[],
         };
         let result = (tool.handler)(&mut context, &args);
         if let Some(handle) = responder {

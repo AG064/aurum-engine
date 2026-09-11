@@ -52,6 +52,14 @@ pub struct ToolContext<'a> {
     /// Where the live-editor bridge lives, when the server was started with
     /// one. `None` means the editor tools explain how to configure it.
     pub editor_bridge: Option<&'a Path>,
+    /// Whether mutating tools are refused.
+    ///
+    /// Carried here so a handler can *describe* the server's posture rather
+    /// than guess at it. Without it a status tool could only report what it
+    /// hoped the configuration was, which is worse than not reporting at all.
+    pub read_only: bool,
+    /// Tools withheld by name, whatever their annotations say.
+    pub denied: &'a [String],
 }
 
 /// The signature every tool handler implements.
@@ -825,6 +833,54 @@ pub(crate) fn schema(properties: Value, required: Value) -> Value {
 /// Order is presentation order in `tools/list`: runtime reads first, then
 /// runtime writes, then content authoring, which is also the order a cautious
 /// client should consider them in.
+/// Report what this server is, and what it will do.
+///
+/// The first thing a client should call, because every other tool's answer
+/// depends on permissions the client cannot otherwise observe. Withheld tools
+/// are *named* rather than merely absent, so a client can tell "this server
+/// refuses that" from "I mistyped the name" — which are the same observation
+/// from the outside otherwise.
+///
+/// This tool is exempt from the deny list. A server that can withhold its own
+/// explanation of what it withholds leaves a client with no way to find out
+/// why, which is a worse failure than the one the deny list exists to prevent.
+fn mcp_status(ctx: &mut ToolContext<'_>, _args: &Value) -> ToolResult {
+    let all = catalog();
+
+    let denied: Vec<&str> = all
+        .iter()
+        .filter(|tool| tool.name != STATUS_TOOL && ctx.denied.iter().any(|d| d == tool.name))
+        .map(|tool| tool.name)
+        .collect();
+
+    let withheld_by_read_only: Vec<&str> = all
+        .iter()
+        .filter(|tool| ctx.read_only && !tool.read_only && !denied.contains(&tool.name))
+        .map(|tool| tool.name)
+        .collect();
+
+    let withheld = denied.len() + withheld_by_read_only.len();
+
+    Ok(json!({
+        "root": ctx.paths.root().display().to_string(),
+        "read_only": ctx.read_only,
+        "editor_bridge": ctx.editor_bridge.map(|path| path.display().to_string()),
+        "tools": {
+            "total": all.len(),
+            "exposed": all.len() - withheld,
+            "withheld": withheld,
+            "denied": denied,
+            "withheld_by_read_only": withheld_by_read_only,
+        },
+    }))
+}
+
+/// The name of the tool that describes the others.
+///
+/// Named once because three places have to agree on it: the catalog, the deny
+/// list's exemption, and the error a refused call returns.
+pub const STATUS_TOOL: &str = "aurum_mcp_status";
+
 pub fn catalog() -> Vec<Tool> {
     let mut tools = vec![
         Tool {
@@ -1169,6 +1225,16 @@ pub fn catalog() -> Vec<Tool> {
             read_only: false,
             handler: tool_story_import_state,
         },
+        Tool {
+            name: STATUS_TOOL,
+            description: "Report this server's effective permissions: the directory every path \
+                          is confined to, whether mutating tools are refused, and which tools \
+                          are withheld and why. Call this first when a tool you expected is \
+                          missing from the list.",
+            input_schema: json!({ "type": "object", "properties": {} }),
+            read_only: true,
+            handler: mcp_status,
+        },
     ];
     tools.extend(crate::content_tools::catalog());
     tools.extend(crate::editor_tools::catalog());
@@ -1182,16 +1248,27 @@ pub fn find(name: &str) -> Option<Tool> {
 
 /// The `tools/list` payload.
 pub fn list_payload() -> Value {
-    list_payload_for(false)
+    list_payload_with(false, &[])
 }
 
-/// The `tools/list` payload, optionally restricted to read-only tools.
-///
-/// In read-only mode mutating tools are *omitted* rather than merely refused,
-/// so a client never sees a tool it cannot use.
+/// The `tools/list` payload, restricted to read-only tools alone.
 pub fn list_payload_for(read_only_only: bool) -> Value {
+    list_payload_with(read_only_only, &[])
+}
+
+/// The `tools/list` payload under the server's effective permissions.
+///
+/// Withheld tools are **omitted rather than merely refused**, so a client never
+/// sees a tool it cannot use. That is the whole reason the filtering happens
+/// here and not only at the call site: advertising something that will always
+/// be refused wastes a turn and reads as a broken server.
+///
+/// The status tool is never omitted, for the same reason it can never be
+/// denied — a client has to be able to find out what it is missing.
+pub fn list_payload_with(read_only_only: bool, denied: &[String]) -> Value {
     let tools: Vec<Value> = catalog()
         .iter()
+        .filter(|t| t.name == STATUS_TOOL || !denied.iter().any(|d| d == t.name))
         .filter(|t| !read_only_only || t.read_only)
         .map(|t| {
             json!({
@@ -1219,6 +1296,8 @@ mod tests {
             engine,
             paths,
             editor_bridge: None,
+            read_only: false,
+            denied: &[],
         };
         (tool.handler)(&mut ctx, &args)
     }

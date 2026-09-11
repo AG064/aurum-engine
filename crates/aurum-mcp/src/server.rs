@@ -24,6 +24,14 @@ pub struct ServerConfig {
     pub trace: bool,
     /// Directory the live-editor bridge polls, from `--editor-bridge`.
     pub editor_bridge: Option<std::path::PathBuf>,
+    /// Tools withheld by name, from `--deny`.
+    ///
+    /// Precedence, in one place so it cannot drift: a denied tool is refused
+    /// whatever its annotations say; read-only then refuses mutating tools that
+    /// survived the deny list; and the status tool is exempt from both, because
+    /// a client that cannot ask what it is missing cannot tell a withheld tool
+    /// from a misspelled one.
+    pub denied: Vec<String>,
 }
 
 /// Serve MCP over `reader`/`writer` until end of input.
@@ -119,7 +127,7 @@ fn handle(
             ))
         }
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(tools::list_payload_for(config.read_only)),
+        "tools/list" => Ok(tools::list_payload_with(config.read_only, &config.denied)),
         "tools/call" => call_tool(engine, paths, config, &params),
         other => Err(RpcError::method_not_found(other)),
     };
@@ -144,6 +152,16 @@ fn call_tool(
     let tool = tools::find(name)
         .ok_or_else(|| RpcError::invalid_params(format!("unknown tool: {name}")))?;
 
+    // The status tool is never denied: a client that cannot ask what is
+    // withheld cannot distinguish a refusal from a typo, and would have no way
+    // to discover why the server is behaving oddly.
+    if name != tools::STATUS_TOOL && config.denied.iter().any(|denied| denied == name) {
+        return Err(RpcError::invalid_params(format!(
+            "'{name}' is withheld by this server's deny list; call {} to see what is available",
+            tools::STATUS_TOOL
+        )));
+    }
+
     if config.read_only && !tool.read_only {
         return Err(RpcError::invalid_params(format!(
             "'{name}' mutates state and this server is running read-only"
@@ -156,6 +174,8 @@ fn call_tool(
         engine,
         paths,
         editor_bridge: config.editor_bridge.as_deref(),
+        read_only: config.read_only,
+        denied: &config.denied,
     };
     let outcome = (tool.handler)(&mut ctx, &arguments);
 
@@ -171,6 +191,113 @@ fn call_tool(
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn a_denied_tool_is_both_refused_and_hidden() {
+        // Both halves matter. Advertising a tool that will always be refused
+        // wastes a turn and reads as a broken server; refusing one that is
+        // still advertised is the same failure seen from the other side.
+        let out = run_session(
+            &[
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+                r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"aurum_entity_spawn","arguments":{}}}"#,
+            ],
+            ServerConfig {
+                read_only: false,
+                trace: false,
+                editor_bridge: None,
+                denied: vec!["aurum_entity_spawn".to_string()],
+            },
+        );
+
+        let listed = out[0]["result"]["tools"]
+            .as_array()
+            .expect("a tool list")
+            .iter()
+            .any(|tool| tool["name"] == "aurum_entity_spawn");
+        assert!(!listed, "a denied tool must not be advertised");
+
+        let message = out[1]["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            message.contains("withheld"),
+            "a denied call should say it was withheld, got '{message}'"
+        );
+    }
+
+    #[test]
+    fn the_status_tool_can_never_be_denied() {
+        // A client that cannot ask what is missing cannot tell a refusal from
+        // a typo, and would have no way to discover why the server is behaving
+        // oddly. That is a worse failure than the one a deny list prevents.
+        let out = run_session(
+            &[
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+                r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"aurum_mcp_status","arguments":{}}}"#,
+            ],
+            ServerConfig {
+                read_only: false,
+                trace: false,
+                editor_bridge: None,
+                denied: vec!["aurum_mcp_status".to_string()],
+            },
+        );
+
+        let listed = out[0]["result"]["tools"]
+            .as_array()
+            .expect("a tool list")
+            .iter()
+            .any(|tool| tool["name"] == "aurum_mcp_status");
+        assert!(listed, "the status tool must always be advertised");
+        assert!(
+            out[1].get("error").is_none(),
+            "the status tool must always be callable, got {:?}",
+            out[1]
+        );
+    }
+
+    #[test]
+    fn the_status_tool_reports_the_permissions_it_is_running_under() {
+        // The point of carrying the configuration into the handler: this has
+        // to describe the server it is actually in, not a plausible one.
+        let out = run_session(
+            &[
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"aurum_mcp_status","arguments":{}}}"#,
+            ],
+            ServerConfig {
+                read_only: true,
+                trace: false,
+                editor_bridge: None,
+                denied: vec!["aurum_entity_spawn".to_string()],
+            },
+        );
+
+        let text = out[0]["result"]["content"][0]["text"]
+            .as_str()
+            .expect("a text payload");
+        let payload: Value = serde_json::from_str(text).expect("valid JSON");
+
+        assert_eq!(payload["read_only"], true);
+        assert!(
+            payload["root"]
+                .as_str()
+                .is_some_and(|root| !root.is_empty()),
+            "the status should name the root paths are confined to"
+        );
+        assert!(
+            payload["tools"]["withheld"].as_i64().unwrap_or(0) > 0,
+            "read-only and a deny list together withhold something"
+        );
+        let denied = payload["tools"]["denied"]
+            .as_array()
+            .expect("a denied list");
+        assert!(
+            denied.iter().any(|name| name == "aurum_entity_spawn"),
+            "the withheld tool should be named rather than merely counted"
+        );
+    }
 
     /// Drive a whole session in memory and return the response lines.
     fn run_session(requests: &[&str], config: ServerConfig) -> Vec<Value> {
@@ -286,6 +413,7 @@ mod tests {
             read_only: true,
             trace: false,
             editor_bridge: None,
+            denied: Vec::new(),
         };
         let out = run_session(
             &[
@@ -324,6 +452,7 @@ mod tests {
                 read_only: true,
                 trace: false,
                 editor_bridge: None,
+                denied: Vec::new(),
             },
         );
         let all_n = all[0]["result"]["tools"].as_array().unwrap().len();
