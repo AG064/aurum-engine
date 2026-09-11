@@ -21,4 +21,4 @@ mod story;
 mod interpreter;
 
 pub use story::{Choice, ChoiceEntry, DialogueEntry, Entry, Scene, Story, StoryError, VarValue};
-pub use interpreter::{Event, Interpreter, InterpreterState};
+pub use interpreter::{ChoiceData, Event, Interpreter, InterpreterState};

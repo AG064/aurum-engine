@@ -59,8 +59,9 @@ Point it at the absolute path to `aurum.exe` if it is not on your `PATH`.
 
 ## Tools
 
-22 tools, all prefixed `aurum_`. Every read-only tool carries the
-`readOnlyHint` annotation, so a client can filter without a second code path.
+31 tools, all prefixed `aurum_`: 12 read-only and 19 mutating. Every read-only
+tool carries the `readOnlyHint` annotation, so a client can filter without a
+second code path.
 
 | Read-only | Mutating |
 |---|---|
@@ -73,16 +74,36 @@ Point it at the absolute path to `aurum.exe` if it is not on your `PATH`.
 | `aurum_fingerprint` | `aurum_state_set` |
 | `aurum_space_state` | `aurum_time_set_scale` |
 | `aurum_time_get` | `aurum_module_register` |
-| | `aurum_space_step` |
-| | `aurum_save` |
-| | `aurum_load` |
+| `aurum_story_state` | `aurum_space_step` |
+| `aurum_story_get_variable` | `aurum_save` |
+| `aurum_story_export_state` | `aurum_load` |
 | | `aurum_reset` |
+| | `aurum_story_load` |
+| | `aurum_story_advance` |
+| | `aurum_story_pick_choice` |
+| | `aurum_story_jump_to` |
+| | `aurum_story_set_variable` |
+| | `aurum_story_import_state` |
 
 **Start with `aurum_world_snapshot`.** It returns the whole session — entities
 and their components, global state, time scale, modules, pending event count,
-and the space snapshot — in one call. That is deliberate: an agent grounded in
-one round trip does not need an N+1 exploration loop. Entity payloads are
-bounded by `entity_limit` (default 200) and report `entities_truncated`.
+the space snapshot, and the story cursor — in one call. That is deliberate: an
+agent grounded in one round trip does not need an N+1 exploration loop. Entity
+payloads are bounded by `entity_limit` (default 200) and report
+`entities_truncated`.
+
+### Story / visual novel
+
+`aurum_story_load` accepts a story **file** (`path`, confined to the server
+root) or **inline JSON** (`story`). `aurum_story_advance` then returns one
+event per call — `Dialogue`, `Choice`, `SceneEnded`, `Quit`, `Goto`,
+`Command`, or `Error` — and a `Choice` event carries its own indices, so
+`aurum_story_pick_choice` needs no guessing. Story variables are `bool`,
+`number`, or `string`, matching the interpreter's model.
+
+A loaded story travels in the save payload together with its own definition, so
+`aurum_save` produces a self-contained file that `aurum_load` can rebuild
+without the story file still being on disk.
 
 ## Read-only mode
 

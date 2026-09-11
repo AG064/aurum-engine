@@ -11,9 +11,10 @@
 use std::path::{Component, Path, PathBuf};
 
 use aurum_core::prelude::StateValue;
+use aurum_vn::{Story, VarValue};
 use serde_json::{json, Value};
 
-use crate::engine::Engine;
+use crate::engine::{var_value_to_json, Engine};
 
 /// A tool invocation failure.
 ///
@@ -353,6 +354,11 @@ fn ok(value: Value) -> ToolResult {
     Ok(value)
 }
 
+/// The shared "you forgot to load a story" failure.
+fn no_story() -> ToolError {
+    ToolError::Invalid("no story is loaded; call aurum_story_load first".into())
+}
+
 // ---------------------------------------------------------------------------
 // Read handlers
 // ---------------------------------------------------------------------------
@@ -624,6 +630,176 @@ fn tool_reset(ctx: &mut ToolContext<'_>, _params: &Value) -> ToolResult {
 }
 
 // ---------------------------------------------------------------------------
+// Story (visual novel) handlers
+// ---------------------------------------------------------------------------
+
+fn tool_story_load(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult {
+    let args = Args::new(params)?;
+
+    let story_json = match args.get("path") {
+        Some(_) => {
+            let path = ctx.paths.resolve(args.str("path")?)?;
+            std::fs::read_to_string(&path)
+                .map_err(|e| ToolError::Io(format!("could not read '{}': {e}", path.display())))?
+        }
+        None => match args.get("story") {
+            Some(Value::String(s)) => s.clone(),
+            Some(object @ Value::Object(_)) => object.to_string(),
+            Some(other) => {
+                return Err(ToolError::Invalid(format!(
+                    "'story' must be a JSON object or string, got {}",
+                    kind_of(other)
+                )))
+            }
+            None => {
+                return Err(ToolError::Invalid(
+                    "provide either 'path' (a story file) or 'story' (inline JSON)".into(),
+                ))
+            }
+        },
+    };
+
+    let start = match args.get("start_scene") {
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => {
+            return Err(ToolError::Invalid(format!(
+                "'start_scene' must be a string, got {}",
+                kind_of(other)
+            )))
+        }
+        // Scenes are held in a BTreeMap, so "first" is the lowest name.
+        None => {
+            let story = Story::from_json(&story_json)
+                .map_err(|e| ToolError::Invalid(format!("invalid story JSON: {e}")))?;
+            story
+                .scenes
+                .keys()
+                .next()
+                .cloned()
+                .ok_or_else(|| ToolError::Invalid("story contains no scenes".into()))?
+        }
+    };
+
+    ctx.engine
+        .load_story(&story_json, &start)
+        .map_err(|e| ToolError::Engine(e.to_string()))?;
+
+    let mut out = ctx.engine.story_state_json();
+    out["started_at"] = json!(start);
+    ok(out)
+}
+
+fn tool_story_state(ctx: &mut ToolContext<'_>, _params: &Value) -> ToolResult {
+    ok(ctx.engine.story_state_json())
+}
+
+fn tool_story_advance(ctx: &mut ToolContext<'_>, _params: &Value) -> ToolResult {
+    if !ctx.engine.has_story() {
+        return Err(no_story());
+    }
+    match ctx.engine.advance_story() {
+        Some(event) => ok(event),
+        None => Err(no_story()),
+    }
+}
+
+fn tool_story_pick_choice(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult {
+    let args = Args::new(params)?;
+    let index = args.i64("index")?;
+    if index < 0 {
+        return Err(ToolError::Invalid(format!(
+            "'index' must be zero or greater, got {index}"
+        )));
+    }
+    if !ctx.engine.has_story() {
+        return Err(no_story());
+    }
+    match ctx.engine.pick_story_choice(index as usize) {
+        Some(Ok(event)) => ok(event),
+        Some(Err(message)) => Err(ToolError::Invalid(message)),
+        None => Err(no_story()),
+    }
+}
+
+fn tool_story_jump_to(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult {
+    let args = Args::new(params)?;
+    let target = args.str("target")?;
+    if !ctx.engine.has_story() {
+        return Err(no_story());
+    }
+    match ctx.engine.jump_story_to(target) {
+        Some(Ok(event)) => ok(event),
+        Some(Err(message)) => Err(ToolError::Invalid(message)),
+        None => Err(no_story()),
+    }
+}
+
+fn tool_story_get_variable(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult {
+    let args = Args::new(params)?;
+    let name = args.str("name")?;
+    match ctx.engine.story_variable(name) {
+        Some(value) => ok(json!({
+            "name": name,
+            "present": true,
+            "value": var_value_to_json(value),
+        })),
+        None => ok(json!({ "name": name, "present": false, "value": Value::Null })),
+    }
+}
+
+fn tool_story_set_variable(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult {
+    let args = Args::new(params)?;
+    let name = args.str("name")?;
+    let raw = args.value("value")?;
+    let value = match raw {
+        Value::Bool(b) => VarValue::Bool(*b),
+        Value::Number(n) => VarValue::Number(
+            n.as_f64()
+                .ok_or_else(|| ToolError::Invalid("'value' must be a finite number".into()))?,
+        ),
+        Value::String(s) => VarValue::String(s.clone()),
+        other => {
+            return Err(ToolError::Invalid(format!(
+                "story variables are bool, number, or string; got {}",
+                kind_of(other)
+            )))
+        }
+    };
+    let echoed = var_value_to_json(&value);
+    if !ctx.engine.set_story_variable(name, value) {
+        return Err(no_story());
+    }
+    ok(json!({ "name": name, "value": echoed }))
+}
+
+fn tool_story_export_state(ctx: &mut ToolContext<'_>, _params: &Value) -> ToolResult {
+    let Some(interpreter) = ctx.engine.story() else {
+        return Err(no_story());
+    };
+    let raw = interpreter.export_state();
+    ok(serde_json::from_str(&raw).unwrap_or_else(|_| json!(raw)))
+}
+
+fn tool_story_import_state(ctx: &mut ToolContext<'_>, params: &Value) -> ToolResult {
+    let args = Args::new(params)?;
+    let state = args.value("state")?;
+    if !ctx.engine.has_story() {
+        return Err(no_story());
+    }
+    let imported = ctx
+        .engine
+        .story_mut()
+        .map(|interpreter| interpreter.import_state(&state.to_string()))
+        .unwrap_or(false);
+    if !imported {
+        return Err(ToolError::Invalid(
+            "'state' is not a valid exported story state".into(),
+        ));
+    }
+    ok(ctx.engine.story_state_json())
+}
+
+// ---------------------------------------------------------------------------
 // Catalog
 // ---------------------------------------------------------------------------
 
@@ -879,11 +1055,109 @@ pub fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "aurum_reset",
-            description: "Clear the world, state, events, and space simulation. Registered \
+            description: "Clear the world, state, events, story, and space simulation. Registered \
                           modules and the time scale survive.",
             input_schema: schema(json!({}), json!([])),
             read_only: false,
             handler: tool_reset,
+        },
+        Tool {
+            name: "aurum_story_load",
+            description: "Load a visual-novel story and position the cursor. Give either `path` \
+                          (a JSON file inside the server root) or `story` (inline JSON). When \
+                          `start_scene` is omitted the lowest-named scene is used. Replaces any \
+                          story already loaded; a failure leaves the previous one intact.",
+            input_schema: schema(
+                json!({
+                    "path": { "type": "string", "description": "Story file relative to the server root." },
+                    "story": { "type": ["object", "string"], "description": "Inline story JSON." },
+                    "start_scene": { "type": "string", "description": "Scene to begin at." }
+                }),
+                json!([]),
+            ),
+            read_only: false,
+            handler: tool_story_load,
+        },
+        Tool {
+            name: "aurum_story_state",
+            description: "The story cursor: current scene and entry index, variables, and any \
+                          pending choice block. Reports `loaded: false` when no story is loaded.",
+            input_schema: schema(json!({}), json!([])),
+            read_only: true,
+            handler: tool_story_state,
+        },
+        Tool {
+            name: "aurum_story_advance",
+            description: "Advance the story one step and return the event: Dialogue, Choice, \
+                          SceneEnded, Quit, Goto, Command, or Error. On a Choice event, call \
+                          aurum_story_pick_choice with one of the returned indices.",
+            input_schema: schema(json!({}), json!([])),
+            read_only: false,
+            handler: tool_story_advance,
+        },
+        Tool {
+            name: "aurum_story_pick_choice",
+            description: "Choose an option from the pending choice block by its visible index, \
+                          then return the next event.",
+            input_schema: schema(
+                json!({ "index": { "type": "integer", "minimum": 0, "description": "Index from the Choice event's choices array." } }),
+                json!(["index"]),
+            ),
+            read_only: false,
+            handler: tool_story_pick_choice,
+        },
+        Tool {
+            name: "aurum_story_jump_to",
+            description: "Jump to a label or scene, then return the next event.",
+            input_schema: schema(
+                json!({ "target": { "type": "string", "description": "Label or scene name." } }),
+                json!(["target"]),
+            ),
+            read_only: false,
+            handler: tool_story_jump_to,
+        },
+        Tool {
+            name: "aurum_story_get_variable",
+            description: "Read one story variable.",
+            input_schema: schema(
+                json!({ "name": { "type": "string", "description": "Variable name." } }),
+                json!(["name"]),
+            ),
+            read_only: true,
+            handler: tool_story_get_variable,
+        },
+        Tool {
+            name: "aurum_story_set_variable",
+            description: "Set a story variable. Values are bool, number, or string, matching the \
+                          interpreter's variable model.",
+            input_schema: schema(
+                json!({
+                    "name": { "type": "string", "description": "Variable name." },
+                    "value": { "type": ["boolean", "number", "string"], "description": "New value." }
+                }),
+                json!(["name", "value"]),
+            ),
+            read_only: false,
+            handler: tool_story_set_variable,
+        },
+        Tool {
+            name: "aurum_story_export_state",
+            description: "Export the story cursor and variables as JSON, for handing to \
+                          aurum_story_import_state later.",
+            input_schema: schema(json!({}), json!([])),
+            read_only: true,
+            handler: tool_story_export_state,
+        },
+        Tool {
+            name: "aurum_story_import_state",
+            description: "Restore a story cursor and variables from a value produced by \
+                          aurum_story_export_state. Requires a story to be loaded already.",
+            input_schema: schema(
+                json!({ "state": { "type": "object", "description": "An exported story state." } }),
+                json!(["state"]),
+            ),
+            read_only: false,
+            handler: tool_story_import_state,
         },
     ]
 }
@@ -1358,5 +1632,257 @@ mod tests {
         .unwrap();
         assert_eq!(out["ticks"], 5, "spiral guard caps at 5 per call");
         assert!(out["tick_seconds"].as_f64().unwrap() > 0.0);
+    }
+
+    const STORY: &str = r#"{
+        "version": "1.0",
+        "variables": { "visited": false },
+        "scenes": {
+            "start": {
+                "entries": [
+                    { "type": "dialogue", "speaker": "Narrator", "text": "You wake up." },
+                    { "type": "choice", "choices": [
+                        { "text": "Go left", "goto": "left" },
+                        { "text": "Go right", "goto": "right" }
+                    ] }
+                ]
+            },
+            "left": { "entries": [ { "type": "dialogue", "text": "A cold corridor." } ] },
+            "right": { "entries": [ { "type": "quit" } ] }
+        }
+    }"#;
+
+    fn load_story_via_tool(engine: &mut Engine, paths: &PathGuard) -> Value {
+        call(
+            engine,
+            paths,
+            "aurum_story_load",
+            json!({"story": STORY, "start_scene": "start"}),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn story_load_advance_and_branch_through_tools() {
+        let (mut engine, paths) = ctx_with_root(".");
+        let loaded = load_story_via_tool(&mut engine, &paths);
+        assert_eq!(loaded["loaded"], true);
+        assert_eq!(loaded["current_scene"], "start");
+
+        let dialogue = call(&mut engine, &paths, "aurum_story_advance", json!({})).unwrap();
+        assert_eq!(dialogue["type"], "Dialogue");
+        assert_eq!(dialogue["text"], "You wake up.");
+
+        let choice = call(&mut engine, &paths, "aurum_story_advance", json!({})).unwrap();
+        assert_eq!(choice["type"], "Choice");
+        assert_eq!(choice["choices"].as_array().unwrap().len(), 2);
+
+        let after = call(
+            &mut engine,
+            &paths,
+            "aurum_story_pick_choice",
+            json!({"index": 0}),
+        )
+        .unwrap();
+        assert_eq!(after["text"], "A cold corridor.");
+
+        let state = call(&mut engine, &paths, "aurum_story_state", json!({})).unwrap();
+        assert_eq!(state["current_scene"], "left");
+    }
+
+    #[test]
+    fn story_load_defaults_to_the_first_scene_name() {
+        let (mut engine, paths) = ctx_with_root(".");
+        let loaded = call(
+            &mut engine,
+            &paths,
+            "aurum_story_load",
+            json!({"story": STORY}),
+        )
+        .unwrap();
+        // "left" sorts before "right" and "start".
+        assert_eq!(loaded["started_at"], "left");
+    }
+
+    #[test]
+    fn story_load_from_a_file_inside_the_root() {
+        let root = temp_root("story");
+        let paths = PathGuard::new(&root);
+        let mut engine = Engine::new();
+
+        std::fs::write(root.join("story.json"), STORY).unwrap();
+        let loaded = call(
+            &mut engine,
+            &paths,
+            "aurum_story_load",
+            json!({"path": "story.json", "start_scene": "start"}),
+        )
+        .unwrap();
+        assert_eq!(loaded["current_scene"], "start");
+
+        // The same guard protects story files as save files.
+        let denied = call(
+            &mut engine,
+            &paths,
+            "aurum_story_load",
+            json!({"path": "../story.json"}),
+        );
+        assert!(matches!(denied, Err(ToolError::Denied(_))));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn story_tools_require_a_loaded_story() {
+        let (mut engine, paths) = ctx_with_root(".");
+        for name in [
+            "aurum_story_advance",
+            "aurum_story_pick_choice",
+            "aurum_story_jump_to",
+            "aurum_story_export_state",
+        ] {
+            let args = if name == "aurum_story_pick_choice" {
+                json!({"index": 0})
+            } else if name == "aurum_story_jump_to" {
+                json!({"target": "start"})
+            } else {
+                json!({})
+            };
+            let result = call(&mut engine, &paths, name, args);
+            assert!(
+                matches!(result, Err(ToolError::Invalid(_))),
+                "{name} should require a story, got {result:?}"
+            );
+        }
+        // Reading story state is safe without one and reports absence.
+        let state = call(&mut engine, &paths, "aurum_story_state", json!({})).unwrap();
+        assert_eq!(state["loaded"], false);
+    }
+
+    #[test]
+    fn story_variables_through_tools() {
+        let (mut engine, paths) = ctx_with_root(".");
+        load_story_via_tool(&mut engine, &paths);
+
+        let got = call(
+            &mut engine,
+            &paths,
+            "aurum_story_get_variable",
+            json!({"name": "visited"}),
+        )
+        .unwrap();
+        assert_eq!(got["present"], true);
+        assert_eq!(got["value"], false);
+
+        call(
+            &mut engine,
+            &paths,
+            "aurum_story_set_variable",
+            json!({"name": "visited", "value": true}),
+        )
+        .unwrap();
+        let after = call(
+            &mut engine,
+            &paths,
+            "aurum_story_get_variable",
+            json!({"name": "visited"}),
+        )
+        .unwrap();
+        assert_eq!(after["value"], true);
+    }
+
+    #[test]
+    fn story_variables_reject_structured_values() {
+        let (mut engine, paths) = ctx_with_root(".");
+        load_story_via_tool(&mut engine, &paths);
+        let err = call(
+            &mut engine,
+            &paths,
+            "aurum_story_set_variable",
+            json!({"name": "x", "value": {"nested": 1}}),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("bool, number, or string"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn story_export_then_import_restores_the_cursor() {
+        let (mut engine, paths) = ctx_with_root(".");
+        load_story_via_tool(&mut engine, &paths);
+        call(&mut engine, &paths, "aurum_story_advance", json!({})).unwrap();
+        call(&mut engine, &paths, "aurum_story_advance", json!({})).unwrap();
+        call(
+            &mut engine,
+            &paths,
+            "aurum_story_pick_choice",
+            json!({"index": 0}),
+        )
+        .unwrap();
+
+        let exported = call(&mut engine, &paths, "aurum_story_export_state", json!({})).unwrap();
+        assert_eq!(exported["current_scene"], "left");
+
+        // Reload the story from scratch, then restore the exported cursor.
+        load_story_via_tool(&mut engine, &paths);
+        assert_eq!(
+            call(&mut engine, &paths, "aurum_story_state", json!({})).unwrap()["current_scene"],
+            "start"
+        );
+        let restored = call(
+            &mut engine,
+            &paths,
+            "aurum_story_import_state",
+            json!({"state": exported}),
+        )
+        .unwrap();
+        assert_eq!(restored["current_scene"], "left");
+    }
+
+    #[test]
+    fn story_import_rejects_a_malformed_state() {
+        let (mut engine, paths) = ctx_with_root(".");
+        load_story_via_tool(&mut engine, &paths);
+        let err = call(
+            &mut engine,
+            &paths,
+            "aurum_story_import_state",
+            json!({"state": "not an object"}),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ToolError::Invalid(_)));
+    }
+
+    #[test]
+    fn story_load_rejects_an_invalid_story() {
+        let (mut engine, paths) = ctx_with_root(".");
+        assert!(call(
+            &mut engine,
+            &paths,
+            "aurum_story_load",
+            json!({"story": "{not json"})
+        )
+        .is_err());
+        assert!(call(
+            &mut engine,
+            &paths,
+            "aurum_story_load",
+            json!({"story": STORY, "start_scene": "nope"})
+        )
+        .is_err());
+        // Neither argument form is a valid call on its own.
+        assert!(call(&mut engine, &paths, "aurum_story_load", json!({})).is_err());
+    }
+
+    #[test]
+    fn story_reset_clears_it() {
+        let (mut engine, paths) = ctx_with_root(".");
+        load_story_via_tool(&mut engine, &paths);
+        call(&mut engine, &paths, "aurum_reset", json!({})).unwrap();
+        assert_eq!(
+            call(&mut engine, &paths, "aurum_story_state", json!({})).unwrap()["loaded"],
+            false
+        );
     }
 }

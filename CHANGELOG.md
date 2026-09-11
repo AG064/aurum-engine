@@ -10,15 +10,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - **`aurum-mcp`** — headless Model Context Protocol server. Drives the engine
   over newline-delimited JSON-RPC 2.0 on stdio with no Godot process, exposing
-  22 `aurum_*` tools across entities, components, events, state, time, the
-  space simulation, and save/load. Adds **no external dependencies**: only
-  `aurum-core`, `aurum-space`, and the already-locked `serde` stack.
+  31 `aurum_*` tools (12 read-only, 19 mutating) across entities, components,
+  events, state, time, the space simulation, visual-novel stories, and
+  save/load. Adds **no external dependencies**: only `aurum-core`,
+  `aurum-space`, `aurum-vn`, and the already-locked `serde` stack.
   - `--read-only` omits and refuses mutating tools.
-  - `--root` confines `aurum_save` / `aurum_load`, refusing `..` escapes and
-    re-checking existing paths through symlinks.
+  - `--root` confines `aurum_save` / `aurum_load` and story files, refusing
+    `..` escapes and re-checking existing paths through symlinks.
   - Saves in the same JSON shape as `AurumNode.save_to_json`, so a session
-    round-trips between the headless and Godot surfaces.
-  - 65 tests, including full protocol sessions driven in memory.
+    round-trips between the headless and Godot surfaces. A loaded story travels
+    with its own definition, so a save file is self-contained.
+  - 90 tests, including full protocol sessions driven in memory.
 
 - **`aurum-core::dynamic`** — `DynamicWorld`, a scriptable string-keyed world
   with JSON-blob components. The generically typed `ecs::World` cannot be
@@ -28,6 +30,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - **`aurum-core::state`** — `State::set_owned` accepts a runtime-owned key.
   Callers receiving keys from outside the binary no longer have to
   `Box::leak` them to satisfy `set`'s `&'static str` bound.
+
+- **`aurum-core::time`** — `FixedTimestep` derives `Debug` and `Clone`.
+
+- **`aurum-vn`** — `ChoiceData` is now re-exported from the crate root.
 
 - **`aurum-cli`** — the `aurum` binary, with `aurum mcp` delegating to
   `aurum-mcp` so the two entry points cannot drift.
