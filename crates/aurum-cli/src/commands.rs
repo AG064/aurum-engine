@@ -521,6 +521,21 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 }
 
+/// Whether a restart may go ahead, given what happened when the editor was
+/// asked to close.
+///
+/// Separated from the command so the rule can be tested without an editor. The
+/// whole value of the rule is that the refusal comes *before* the launch, and
+/// that is a property of this decision rather than of the code around it.
+///
+/// `NotRunning` counts as closed: the record described a process that had
+/// already exited on its own, so nothing is in the way.
+fn may_start_again(outcomes: &[StopOutcome]) -> bool {
+    outcomes
+        .iter()
+        .all(|outcome| matches!(outcome, StopOutcome::Stopped | StopOutcome::NotRunning))
+}
+
 /// `aurum restart [project]`
 ///
 /// Restart the editor deliberately, for the one case the classifier names: a
@@ -573,27 +588,23 @@ pub fn restart(args: &[String]) -> ExitCode {
         return ExitCode::from(exit::WARNING);
     }
 
-    let mut closed = true;
+    let mut outcomes = Vec::new();
     let mut stopped = Vec::new();
     for record in &editors {
-        match terminate(record, options.force, STOP_TIMEOUT) {
-            StopOutcome::Stopped | StopOutcome::NotRunning => {
-                let _ = record.remove(&session.ownership_directory());
-                stopped.push(record.pid);
-                if !options.json {
-                    println!("  stopped the editor (pid {})", record.pid);
-                }
+        let outcome = terminate(record, options.force, STOP_TIMEOUT);
+        if matches!(outcome, StopOutcome::Stopped | StopOutcome::NotRunning) {
+            let _ = record.remove(&session.ownership_directory());
+            stopped.push(record.pid);
+            if !options.json {
+                println!("  stopped the editor (pid {})", record.pid);
             }
-            other => {
-                closed = false;
-                if !options.json {
-                    println!("  {}", other.describe(ProcessKind::Editor));
-                }
-            }
+        } else if !options.json {
+            println!("  {}", outcome.describe(ProcessKind::Editor));
         }
+        outcomes.push(outcome);
     }
 
-    if !closed {
+    if !may_start_again(&outcomes) {
         // The important part. Starting a second editor over one that would not
         // close is how a project ends up with two of them holding the same
         // files, so nothing is started until the old one is known to be gone.
@@ -1835,6 +1846,50 @@ mod tests {
         let first = reload_evidence_message(Some("aurum-unmanaged"), None);
         assert!(first.contains("aurum-unmanaged"), "got '{first}'");
         assert!(!first.contains("->"), "there was nothing to compare with");
+    }
+
+    #[test]
+    fn a_restart_proceeds_only_when_the_old_editor_is_gone() {
+        // The rule the command exists to keep. A refusal has to come before the
+        // launch, because starting a second editor over one that would not
+        // close is how a project ends up with two holding the same files.
+        assert!(may_start_again(&[StopOutcome::Stopped]));
+        assert!(may_start_again(&[StopOutcome::NotRunning]));
+        assert!(may_start_again(&[
+            StopOutcome::Stopped,
+            StopOutcome::NotRunning
+        ]));
+        assert!(
+            may_start_again(&[]),
+            "nothing running is not a reason to refuse"
+        );
+    }
+
+    #[test]
+    fn a_restart_is_refused_when_the_editor_would_not_close() {
+        assert!(
+            !may_start_again(&[StopOutcome::StillRunning]),
+            "a window with unsaved work must not be discarded to save a keypress"
+        );
+        assert!(
+            !may_start_again(&[StopOutcome::Refused("not ours".into())]),
+            "a process this session did not launch must never be replaced"
+        );
+    }
+
+    #[test]
+    fn one_stubborn_editor_stops_the_whole_restart() {
+        // With several records, one refusal is enough: starting a replacement
+        // while any of the old ones is still up is the situation the rule is
+        // for.
+        assert!(!may_start_again(&[
+            StopOutcome::Stopped,
+            StopOutcome::StillRunning,
+        ]));
+        assert!(!may_start_again(&[
+            StopOutcome::StillRunning,
+            StopOutcome::Stopped,
+        ]));
     }
 
     fn args(values: &[&str]) -> Vec<String> {

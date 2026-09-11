@@ -46,12 +46,12 @@ mod build_info;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use godot::classes::Node;
-use godot::init::{ExtensionLibrary, InitLevel, gdextension};
+use godot::init::{gdextension, ExtensionLibrary, InitLevel};
 use godot::prelude::*;
 
 use aurum_core::ecs::World;
-use aurum_space::{FlightConfig, FlightInput, SpaceClock, SpaceSimulation, SpaceSnapshot};
 use aurum_core::state::{State, StateValue};
+use aurum_space::{FlightConfig, FlightInput, SpaceClock, SpaceSimulation, SpaceSnapshot};
 use aurum_vn::{Event as StoryEvent, Interpreter, Story, VarValue};
 
 use bridge::{json_to_variant, variant_to_json};
@@ -74,11 +74,12 @@ unsafe impl ExtensionLibrary for AurumExtension {
 #[class(base=Node, rename=AurumNode, tool)]
 pub struct AurumNode {
     base: Base<Node>,
-    /// Typed Rust ECS (for Rust-side systems; optional for GDScript).
+    /// Typed Rust ECS, for Rust-side systems.
     ///
-    /// Held for the node's whole lifetime so Rust-side systems have a world to
-    /// query once they are registered; no in-crate reader exists yet.
-    #[allow(dead_code)]
+    /// Held for the node's whole lifetime. Reached through [`AurumNode::world`]
+    /// and [`AurumNode::world_mut`], and counted through `typed_entity_count`
+    /// so a script can see the world is alive without having to name a Rust
+    /// type it has no way to name.
     pub(crate) world: World,
     /// Dynamic JSON-blob component store: entity -> {type_name -> value}.
     pub(crate) components: HashMap<i64, HashMap<String, serde_json::Value>>,
@@ -100,6 +101,29 @@ pub struct AurumNode {
     pub(crate) modules: Vec<String>,
     /// Story interpreter (set by `story_load`; None until a story is loaded).
     pub(crate) story: Option<Interpreter>,
+}
+
+/// The typed world, for Rust-side systems.
+///
+/// Kept out of the `#[godot_api]` block deliberately: these are not GDScript
+/// methods and must not be registered as any. A script cannot name a Rust type,
+/// so exposing them to Godot would advertise an API nothing on that side could
+/// call.
+impl AurumNode {
+    /// The typed Rust ECS.
+    ///
+    /// Rust-side systems reach the world through this rather than through the
+    /// dynamic store. The separation is the point: GDScript cannot name a Rust
+    /// type, and Rust should not have to parse a JSON blob to read a component
+    /// whose type it already knows.
+    pub fn world(&self) -> &World {
+        &self.world
+    }
+
+    /// The typed Rust ECS, mutably, for systems that spawn or edit entities.
+    pub fn world_mut(&mut self) -> &mut World {
+        &mut self.world
+    }
 }
 
 #[godot_api]
@@ -170,17 +194,25 @@ impl AurumNode {
         self.components.len() as i32
     }
 
+    /// How many entities the typed Rust world holds.
+    ///
+    /// The typed store is for Rust-side systems, and a script cannot name a
+    /// Rust type, so this is a window onto it rather than a way to use it.
+    /// It exists because the alternative was a field nothing could read: a
+    /// world that is written to only from inside the crate is indistinguishable
+    /// from one that does not work, and there was no way to tell which this
+    /// was.
+    #[func]
+    fn typed_entity_count(&self) -> i32 {
+        self.world.entity_count() as i32
+    }
+
     // ===== Components (JSON-blob) =====
 
     /// Attach a component to an entity. The `data` Dictionary is serialized
     /// to JSON for storage. Returns true on success.
     #[func]
-    fn set_component(
-        &mut self,
-        entity: i64,
-        type_name: String,
-        data: Variant,
-    ) -> bool {
+    fn set_component(&mut self, entity: i64, type_name: String, data: Variant) -> bool {
         let comps = match self.components.get_mut(&entity) {
             Some(c) => c,
             None => return false,
@@ -500,7 +532,8 @@ impl AurumNode {
     /// simulation runs at Aurum's fixed physics rate.
     #[func]
     fn space_step(&mut self, real_delta: f32) -> Dictionary<GString, Variant> {
-        self.space_clock.advance(real_delta.max(0.0), &mut self.space);
+        self.space_clock
+            .advance(real_delta.max(0.0), &mut self.space);
         space_snapshot_dict(self.space.snapshot())
     }
 
@@ -700,7 +733,10 @@ impl AurumNode {
                 }
                 story_event_dict_from_pairs(&pairs)
             }
-            StoryEvent::Choice { entry_index, choices } => {
+            StoryEvent::Choice {
+                entry_index,
+                choices,
+            } => {
                 let mut arr = VarArray::new();
                 for c in choices {
                     let mut d = Dictionary::<GString, Variant>::new();
@@ -906,19 +942,59 @@ fn space_snapshot_dict(snapshot: SpaceSnapshot) -> Dictionary<GString, Variant> 
     set_space_value(&mut out, "sector_x", snapshot.sector.x.to_variant());
     set_space_value(&mut out, "sector_y", snapshot.sector.y.to_variant());
     set_space_value(&mut out, "sector_z", snapshot.sector.z.to_variant());
-    set_space_value(&mut out, "position_x", snapshot.local_position.x.to_variant());
-    set_space_value(&mut out, "position_y", snapshot.local_position.y.to_variant());
-    set_space_value(&mut out, "position_z", snapshot.local_position.z.to_variant());
-    set_space_value(&mut out, "orientation_x", snapshot.orientation.x.to_variant());
-    set_space_value(&mut out, "orientation_y", snapshot.orientation.y.to_variant());
-    set_space_value(&mut out, "orientation_z", snapshot.orientation.z.to_variant());
-    set_space_value(&mut out, "orientation_w", snapshot.orientation.w.to_variant());
+    set_space_value(
+        &mut out,
+        "position_x",
+        snapshot.local_position.x.to_variant(),
+    );
+    set_space_value(
+        &mut out,
+        "position_y",
+        snapshot.local_position.y.to_variant(),
+    );
+    set_space_value(
+        &mut out,
+        "position_z",
+        snapshot.local_position.z.to_variant(),
+    );
+    set_space_value(
+        &mut out,
+        "orientation_x",
+        snapshot.orientation.x.to_variant(),
+    );
+    set_space_value(
+        &mut out,
+        "orientation_y",
+        snapshot.orientation.y.to_variant(),
+    );
+    set_space_value(
+        &mut out,
+        "orientation_z",
+        snapshot.orientation.z.to_variant(),
+    );
+    set_space_value(
+        &mut out,
+        "orientation_w",
+        snapshot.orientation.w.to_variant(),
+    );
     set_space_value(&mut out, "velocity_x", snapshot.velocity.x.to_variant());
     set_space_value(&mut out, "velocity_y", snapshot.velocity.y.to_variant());
     set_space_value(&mut out, "velocity_z", snapshot.velocity.z.to_variant());
-    set_space_value(&mut out, "angular_velocity_x", snapshot.angular_velocity.x.to_variant());
-    set_space_value(&mut out, "angular_velocity_y", snapshot.angular_velocity.y.to_variant());
-    set_space_value(&mut out, "angular_velocity_z", snapshot.angular_velocity.z.to_variant());
+    set_space_value(
+        &mut out,
+        "angular_velocity_x",
+        snapshot.angular_velocity.x.to_variant(),
+    );
+    set_space_value(
+        &mut out,
+        "angular_velocity_y",
+        snapshot.angular_velocity.y.to_variant(),
+    );
+    set_space_value(
+        &mut out,
+        "angular_velocity_z",
+        snapshot.angular_velocity.z.to_variant(),
+    );
     set_space_value(&mut out, "fuel", snapshot.fuel.to_variant());
     set_space_value(&mut out, "heat", snapshot.heat.to_variant());
     set_space_value(&mut out, "shield", snapshot.shield.to_variant());
@@ -929,11 +1005,7 @@ fn space_snapshot_dict(snapshot: SpaceSnapshot) -> Dictionary<GString, Variant> 
     out
 }
 
-fn set_space_value(
-    dictionary: &mut Dictionary<GString, Variant>,
-    key: &str,
-    value: Variant,
-) {
+fn set_space_value(dictionary: &mut Dictionary<GString, Variant>, key: &str, value: Variant) {
     let key = GString::from(key);
     dictionary.set(&key, &value);
 }
@@ -941,15 +1013,12 @@ fn set_space_value(
 // Story event helpers build Dictionary payloads for `story_advance`.
 
 fn story_event_dict(type_name: &str, extras: &[(&str, Variant)]) -> Dictionary<GString, Variant> {
-    let mut pairs: Vec<(&str, Variant)> =
-        vec![("type", GString::from(type_name).to_variant())];
+    let mut pairs: Vec<(&str, Variant)> = vec![("type", GString::from(type_name).to_variant())];
     pairs.extend_from_slice(extras);
     story_event_dict_from_pairs(&pairs)
 }
 
-fn story_event_dict_from_pairs(
-    pairs: &[(&str, Variant)],
-) -> Dictionary<GString, Variant> {
+fn story_event_dict_from_pairs(pairs: &[(&str, Variant)]) -> Dictionary<GString, Variant> {
     let mut d = Dictionary::<GString, Variant>::new();
     for (k, v) in pairs {
         let key_gs = GString::from(*k);
