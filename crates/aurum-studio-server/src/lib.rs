@@ -381,7 +381,18 @@ fn handle_connection(stream: TcpStream, shell: &Arc<Shell>) {
     }
 
     match route(&request, shell) {
-        Routed::Once(response) => {
+        Routed::Once(mut response) => {
+            // A token that arrived in the URL was a one-off navigation. The
+            // page's own stylesheet and script requests cannot repeat it, so
+            // the token is planted where the browser will send it by itself.
+            if request
+                .query_value("t")
+                .is_some_and(|value| !value.is_empty())
+            {
+                response
+                    .headers
+                    .push(("Set-Cookie".into(), session_cookie(&shell.token)));
+            }
             let _ = response.write_to(&mut writer);
         }
         Routed::Stream { id, receiver } => {
@@ -426,20 +437,52 @@ fn check_local(request: &Request) -> Result<(), Response> {
     }
 }
 
+/// The cookie the page's own subresource requests carry.
+pub const TOKEN_COOKIE: &str = "aurum_session";
+
 /// Require the session token.
+///
+/// Three places are accepted, in order of how deliberate they are:
+///
+/// 1. `X-Aurum-Token`, which is what the page's own `fetch` calls send, and
+///    what a script or an AI driving the API should send.
+/// 2. `?t=`, which exists only so the browser can be opened at a URL. That is
+///    the one navigation a browser makes without being told to.
+/// 3. The session cookie, which is what makes the page actually work. A
+///    browser fetches the stylesheet and the script as separate requests, and
+///    those carry no query string and no custom header — only cookies. Without
+///    this the page loads and renders as unstyled text.
+///
+/// An empty value counts as absent rather than as a wrong token, so a page
+/// that has no token to offer falls through to the cookie instead of failing
+/// on a header it sent out of habit.
 fn check_token(request: &Request, token: &str) -> Result<(), Response> {
-    // The header is preferred, because a token in a URL ends up in logs and
-    // history. The query parameter exists only so the first page load, which
-    // is a navigation the browser makes on its own, can carry it.
     let presented = request
         .header("x-aurum-token")
-        .or_else(|| request.query_value("t"));
+        .filter(|value| !value.is_empty())
+        .or_else(|| request.query_value("t").filter(|value| !value.is_empty()))
+        .or_else(|| {
+            request
+                .cookie(TOKEN_COOKIE)
+                .filter(|value| !value.is_empty())
+        });
 
     match presented {
         Some(presented) if constant_time_eq(presented, token) => Ok(()),
         Some(_) => Err(Response::error(401, "invalid token\n")),
         None => Err(Response::error(401, "missing token\n")),
     }
+}
+
+/// The `Set-Cookie` that lets the page fetch its own assets.
+///
+/// `HttpOnly` because nothing in the page needs to read it — the script keeps
+/// its own copy for the header — and a token that JavaScript cannot read is a
+/// token an injected script cannot steal. `SameSite=Strict` because every
+/// request this server wants is same-origin, so a cross-site one arriving with
+/// the cookie is by definition not something to honour.
+fn session_cookie(token: &str) -> String {
+    format!("{TOKEN_COOKIE}={token}; Path=/; SameSite=Strict; HttpOnly")
 }
 
 enum Routed {
@@ -1117,10 +1160,18 @@ mod tests {
         let reply = exchange(server.port(), &request);
         assert!(reply.starts_with("HTTP/1.1 200"));
         assert!(reply.contains("text/html"));
+
+        // The token is now legitimately in the `Set-Cookie` header, because
+        // that is how a browser is given it — headers are where credentials
+        // belong. What must never happen is the token being written into the
+        // document itself, where it would sit in view-source, in any cache of
+        // the page, and in anything that saves the HTML.
+        let body = reply.split("\r\n\r\n").nth(1).unwrap_or_default();
         assert!(
-            !reply.contains(server.token()),
-            "the token must not be baked into the page"
+            !body.contains(server.token()),
+            "the token must not be baked into the page body"
         );
+
         server.stop();
         handle.join().unwrap();
     }
@@ -1142,6 +1193,120 @@ mod tests {
             "expected acceptance, got:\n{reply}"
         );
         assert!(reply.contains("accepted"));
+        server.stop();
+        handle.join().unwrap();
+    }
+
+    /// The cookie value a reply asked the browser to store.
+    fn set_cookie(reply: &str) -> Option<String> {
+        reply
+            .lines()
+            .find_map(|line| line.strip_prefix("Set-Cookie: "))
+            .and_then(|value| value.split(';').next())
+            .map(str::to_string)
+    }
+
+    #[test]
+    fn the_page_can_fetch_its_own_assets_the_way_a_browser_does() {
+        // The bug this exists for. A browser fetches the stylesheet and the
+        // script as *separate requests* that carry no query string and no
+        // custom header — only cookies. Every earlier test sent the token
+        // explicitly, which is not what a browser does, so the whole suite
+        // passed while the page rendered as unstyled text with an enormous
+        // SVG where the wordmark's mark should have been.
+        let (server, handle) = start_server("subresources");
+
+        let page = exchange(
+            server.port(),
+            &format!(
+                "GET /?t={} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+                server.token()
+            ),
+        );
+        assert!(page.starts_with("HTTP/1.1 200"), "got:\n{page}");
+        let cookie = set_cookie(&page).expect("the page load should plant a session cookie");
+
+        for asset in ["/style.css", "/app.js"] {
+            let reply = exchange(
+                server.port(),
+                &format!("GET {asset} HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: {cookie}\r\n\r\n"),
+            );
+            assert!(
+                reply.starts_with("HTTP/1.1 200"),
+                "{asset} must load for the page itself, or nothing is styled, got:\n{reply}"
+            );
+        }
+
+        // And the assets really are the stylesheet and the script, not a
+        // refusal body that happens to carry the right status.
+        let css = exchange(
+            server.port(),
+            &format!("GET /style.css HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: {cookie}\r\n\r\n"),
+        );
+        assert!(css.contains(".verdict.ok"), "the stylesheet should be real");
+
+        server.stop();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn a_cookie_still_has_to_be_the_right_token() {
+        let (server, handle) = start_server("badcookie");
+        let reply = exchange(
+            server.port(),
+            &format!(
+                "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: {TOKEN_COOKIE}=nonsense\r\n\r\n"
+            ),
+        );
+        assert!(
+            reply.starts_with("HTTP/1.1 401"),
+            "a guessed cookie is still a guess, got:\n{reply}"
+        );
+        server.stop();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn the_session_cookie_is_httponly_and_same_site() {
+        // HttpOnly keeps an injected script from reading the token; Strict
+        // means a cross-site request arriving with it is not to be honoured.
+        let (server, handle) = start_server("cookieflags");
+        let page = exchange(
+            server.port(),
+            &format!(
+                "GET /?t={} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+                server.token()
+            ),
+        );
+        let header = page
+            .lines()
+            .find(|line| line.starts_with("Set-Cookie: "))
+            .expect("a cookie should be set");
+        assert!(header.contains("HttpOnly"), "got:\n{header}");
+        assert!(header.contains("SameSite=Strict"), "got:\n{header}");
+        assert!(header.contains("Path=/"), "got:\n{header}");
+        server.stop();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn an_empty_header_falls_through_to_the_cookie() {
+        // The page sends its header from sessionStorage, which is empty when
+        // somebody opens the address without a token. An empty value must not
+        // shadow the cookie that would have worked.
+        let (server, handle) = start_server("emptytoken");
+        let reply = exchange(
+            server.port(),
+            &format!(
+                "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Aurum-Token: \r\n\
+                 Cookie: {TOKEN_COOKIE}={}\r\n\r\n",
+                server.token()
+            ),
+        );
+        assert!(
+            reply.starts_with("HTTP/1.1 200"),
+            "an empty header should fall through, got:\n{reply}"
+        );
         server.stop();
         handle.join().unwrap();
     }

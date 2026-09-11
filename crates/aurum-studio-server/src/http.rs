@@ -103,6 +103,22 @@ impl Request {
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.as_str())
     }
+
+    /// A cookie value by name.
+    ///
+    /// The `Cookie` header is one semicolon-separated list, so it is parsed
+    /// rather than matched. This exists because a browser fetches a page's
+    /// stylesheet and script as **separate requests**, and those carry no query
+    /// string and no custom header — only what the origin sends by itself,
+    /// which is a cookie. Authenticating on the header and the query string
+    /// alone therefore passes every test and renders an unstyled page in a
+    /// browser, which is exactly what happened.
+    pub fn cookie(&self, name: &str) -> Option<&str> {
+        self.header("cookie")?.split(';').find_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            (key.trim() == name).then(|| value.trim())
+        })
+    }
 }
 
 /// Read one request.

@@ -103,13 +103,16 @@
 
   // -- requests ----------------------------------------------------------
 
+  // The page load plants an HttpOnly session cookie, which is what the
+  // browser attaches to this page's own asset requests. The copy kept here
+  // exists for the API calls, and is sent only when there is one: an empty
+  // header would shadow the cookie that is doing the real work.
   async function post(path, body) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['X-Aurum-Token'] = token;
     return fetch(path, {
       method: 'POST',
-      headers: {
-        'X-Aurum-Token': token,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(body || {}),
     });
   }
@@ -196,9 +199,10 @@
 
   function connect() {
     setState('connecting', 'connecting');
-    // The token rides in the query here rather than a header because
-    // EventSource cannot set one, and it is already out of the address bar.
-    const stream = new EventSource('/api/events?t=' + encodeURIComponent(token));
+    // EventSource cannot set a header, so the token goes in the query when
+    // there is one. When there is not, the session cookie carries it.
+    const query = token ? '?t=' + encodeURIComponent(token) : '';
+    const stream = new EventSource('/api/events' + query);
 
     stream.onopen = () => setState('open', 'connected');
     stream.onerror = () => {
@@ -218,12 +222,20 @@
 
   // A snapshot first, so the page has something to say before the first event
   // arrives rather than showing an empty shell.
-  fetch('/api/state', { headers: { 'X-Aurum-Token': token } })
+  const stateHeaders = token ? { 'X-Aurum-Token': token } : {};
+  fetch('/api/state', { headers: stateHeaders })
     .then((response) => response.json())
     .then((state) => {
       setProject(state.project);
       say('Studio ' + state.studio + ' · ' + state.root, 'note');
     })
-    .catch(() => setProject(''))
+    .catch(() => {
+      setProject('');
+      say(
+        'Not authorised. Open the address ' +
+          'aurum studio printed, which carries a session token.',
+        'bad'
+      );
+    })
     .finally(connect);
 })();
