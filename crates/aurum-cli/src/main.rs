@@ -19,6 +19,8 @@ USAGE:
 COMMANDS:
     doctor [project]      Check a project and report healthy, warning, or
                           blocked state with evidence.
+    dev [project]         Build, launch the editor, and rebuild when the Rust
+                          side moves. Godot reloads its own content.
     build [project]       Build the GDExtension and install it. A failed build
                           leaves the installed library untouched.
     editor [project]      Launch Godot on the project, supervised.
@@ -48,6 +50,7 @@ fn main() -> ExitCode {
         Some("mcp") => ExitCode::from(aurum_mcp::cli::run(&args[1..]) as u8),
         Some("doctor") => commands::doctor(&args[1..]),
         Some("build") => commands::build(&args[1..]),
+        Some("dev") => commands::dev(&args[1..]),
         Some("editor") => commands::editor(&args[1..]),
         Some("run") => commands::run(&args[1..]),
         Some("stop") => commands::stop(&args[1..]),

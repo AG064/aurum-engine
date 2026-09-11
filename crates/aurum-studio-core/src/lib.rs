@@ -24,6 +24,7 @@
 //! - [`reload`] — what a change costs the running editor
 //! - [`session`] — session identity, state directory, and logs
 //! - [`supervise`] — launching and stopping the processes a session owns
+//! - [`watch`] — noticing that a project changed
 //! - [`hash`] — SHA-256, for verifying artifacts
 //!
 //! ## Dependency policy
@@ -49,6 +50,7 @@ pub mod session;
 pub mod supervise;
 pub mod toml;
 pub mod toolchain;
+pub mod watch;
 
 pub use build::{BuildError, BuildReport, BuildRequest, Profile};
 pub use doctor::{Finding, Health, Report};
@@ -62,3 +64,4 @@ pub use reload::{classify_all, classify_change, classify_path, Classification, V
 pub use session::{redact, Session};
 pub use supervise::{launch, stop_session, terminate, LaunchRequest, StopOutcome};
 pub use toolchain::{Tool, Toolchain};
+pub use watch::{Change, ChangeKind, Debouncer, Watcher};

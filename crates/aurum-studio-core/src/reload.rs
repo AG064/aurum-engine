@@ -199,6 +199,20 @@ pub fn classify_change(path: &Path, contents: Option<&str>) -> Classification {
     base
 }
 
+/// Whether a change means the native extension has to be rebuilt.
+///
+/// Godot reloads its own content without help, so a changed scene or script
+/// needs nothing from Cargo. Only the Rust side and the manifests that drive
+/// it require a build. Rebuilding for a `.gd` edit would be wasted work on
+/// every keystroke-sized save.
+pub fn rebuild_required(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    matches!(extension.as_str(), "rs" | "toml" | "lock")
+}
+
 /// Classify a set of changes, keeping the most severe verdict.
 pub fn classify_all<'a, I>(changes: I) -> Classification
 where
@@ -462,6 +476,21 @@ mod tests {
         let classification = classify_all(Vec::<(&Path, Option<&str>)>::new());
         assert_eq!(classification.verdict, Verdict::NoAction);
         assert!(classification.reason.contains("nothing changed"));
+    }
+
+    #[test]
+    fn only_rust_and_manifests_need_a_build() {
+        // Godot reloads its own content; Cargo is only needed for Rust.
+        assert!(rebuild_required(&path("crates/aurum-core/src/lib.rs")));
+        assert!(rebuild_required(&path("Cargo.toml")));
+        assert!(rebuild_required(&path("Cargo.lock")));
+
+        assert!(!rebuild_required(&path("godot/scripts/a.gd")));
+        assert!(!rebuild_required(&path("godot/main.tscn")));
+        assert!(!rebuild_required(&path("godot/shaders/water.gdshader")));
+        assert!(!rebuild_required(&path("README.md")));
+        // Case should not matter on Windows-style paths.
+        assert!(rebuild_required(&path("crates/thing/SRC/LIB.RS")));
     }
 
     #[test]

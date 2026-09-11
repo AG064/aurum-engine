@@ -10,14 +10,16 @@ use std::process::ExitCode;
 
 use aurum_studio_core::build::{library_name, BuildRequest, Profile};
 use aurum_studio_core::doctor::{diagnose, Health};
-use aurum_studio_core::ownership::ProcessKind;
+use aurum_studio_core::ownership::{OwnershipRecord, ProcessKind};
 use aurum_studio_core::project::clean_path;
 use aurum_studio_core::registry::Registry;
+use aurum_studio_core::reload::{Classification, Verdict};
 use aurum_studio_core::session::Session;
 use aurum_studio_core::supervise::{
     bridge_environment, launch, stop_session, LaunchRequest, StopOutcome,
 };
 use aurum_studio_core::toolchain::{discover, discover_godot_to_launch};
+use aurum_studio_core::watch::{Debouncer, Watcher};
 use aurum_studio_core::Project;
 
 /// Exit codes callers branch on. Distinguishing "unhealthy" from "broken
@@ -38,12 +40,18 @@ struct Options {
     json: bool,
     release: bool,
     force: bool,
+    once: bool,
+    no_editor: bool,
+    interval_ms: u64,
     positional: Vec<String>,
 }
 
 /// Parse the flag shape every command shares.
 fn parse(args: &[String]) -> Result<Options, String> {
-    let mut options = Options::default();
+    let mut options = Options {
+        interval_ms: 250,
+        ..Options::default()
+    };
     let mut index = 0;
     while index < args.len() {
         let argument = args[index].as_str();
@@ -51,6 +59,17 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--json" => options.json = true,
             "--release" => options.release = true,
             "--force" => options.force = true,
+            "--once" => options.once = true,
+            "--no-editor" => options.no_editor = true,
+            "--interval" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--interval requires milliseconds".to_string())?;
+                options.interval_ms = value
+                    .parse()
+                    .map_err(|_| format!("'{value}' is not a number of milliseconds"))?;
+            }
             "--godot" => {
                 index += 1;
                 let value = args
@@ -450,6 +469,231 @@ pub fn stop(args: &[String]) -> ExitCode {
 /// How long to wait for a process to close before reporting it still running.
 const STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// `aurum dev [project]`
+///
+/// The supervised loop: build, launch the editor, watch for changes, and
+/// rebuild when the Rust side moves. Godot content is left to Godot, which
+/// reloads it without help.
+pub fn dev(args: &[String]) -> ExitCode {
+    let options = match parse(args) {
+        Ok(options) => options,
+        Err(message) => return usage("dev", &message),
+    };
+    let path = target(&options);
+
+    let project = match Project::open(&path) {
+        Ok(project) => project,
+        Err(error) => {
+            eprintln!("aurum dev: {error}");
+            return ExitCode::from(exit::BLOCKED);
+        }
+    };
+
+    let Some(package) = project.config.rust_package.clone() else {
+        eprintln!("aurum dev: aurum.toml has no 'rust_package'; there is nothing to build");
+        return ExitCode::from(exit::USAGE);
+    };
+    let Some(addon) = project.layout.addon_directory.clone() else {
+        eprintln!("aurum dev: no Aurum add-on directory found");
+        return ExitCode::from(exit::BLOCKED);
+    };
+
+    let toolchain = discover(&project, options.godot.as_deref());
+    let Some(cargo) = toolchain.cargo.as_ref().map(|tool| tool.path.clone()) else {
+        eprintln!("aurum dev: Cargo was not found on PATH");
+        return ExitCode::from(exit::BLOCKED);
+    };
+
+    let profile = if options.release {
+        Profile::Release
+    } else {
+        Profile::Debug
+    };
+    let destination = addon
+        .join("bin")
+        .join(profile.installed_filename(&library_name(&package)));
+    let request = BuildRequest::new(&project.root, &package, profile, &destination, cargo);
+
+    // ---- initial build ---------------------------------------------------
+    if !options.json {
+        println!(
+            "building {} ({})",
+            package,
+            if profile.is_debug() {
+                "debug"
+            } else {
+                "release"
+            }
+        );
+    }
+    match aurum_studio_core::build::run(&request, options.force, BUILD_TIMEOUT) {
+        Ok(report) => {
+            if options.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "event": "build",
+                        "package": package,
+                        "built": report.built,
+                        "replaced": report.replaced,
+                        "installed_sha256": report.installed.sha256,
+                        "summary": report.summary(),
+                    })
+                );
+            } else {
+                println!("  {}", report.summary());
+            }
+        }
+        Err(error) => {
+            // A failed first build is not fatal to the loop: the editor can
+            // still open, and a later edit may fix it. The installed library
+            // is untouched either way.
+            eprintln!("aurum dev: initial build failed; continuing to watch");
+            eprintln!("{error}");
+        }
+    }
+
+    if options.once {
+        return ExitCode::from(exit::OK);
+    }
+
+    // ---- editor ----------------------------------------------------------
+    let mut launched: Option<OwnershipRecord> = None;
+    if !options.no_editor {
+        match launch_editor(&project, options.godot.as_deref()) {
+            Ok((session, record)) => {
+                if !options.json {
+                    println!(
+                        "editor running (pid {}), log {}",
+                        record.pid,
+                        session.log_path().display()
+                    );
+                }
+                launched = Some(record);
+            }
+            Err(message) => {
+                // Degraded rather than blocked, per the design: builds and
+                // watching continue without an editor attached.
+                eprintln!("aurum dev: {message}");
+                eprintln!("aurum dev: continuing without an editor attached");
+            }
+        }
+    }
+
+    // ---- watch -----------------------------------------------------------
+    let mut watcher = Watcher::new(&project.root);
+    watcher.scan();
+    let mut debouncer = Debouncer::new(interval(options.interval_ms));
+
+    if !options.json {
+        println!(
+            "watching {} ({} files). Ctrl+C to stop; the editor is left running.",
+            project.root.display(),
+            watcher.tracked()
+        );
+    }
+
+    loop {
+        debouncer.push(watcher.scan());
+        let Some(batch) = debouncer.take_if_settled() else {
+            std::thread::sleep(interval(options.interval_ms));
+            continue;
+        };
+
+        let classification = classify_batch(&batch);
+        if classification.verdict == Verdict::NoAction {
+            continue;
+        }
+
+        if options.json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "changed": batch.len(),
+                    "verdict": classification.verdict.label(),
+                    "reason": classification.reason,
+                })
+            );
+        } else {
+            println!(
+                "{} file(s) changed -> {}: {}",
+                batch.len(),
+                classification.verdict.label(),
+                classification.reason
+            );
+        }
+
+        let rebuild = batch
+            .iter()
+            .any(|change| aurum_studio_core::reload::rebuild_required(&change.path));
+        if !rebuild {
+            // Godot reloads its own content; there is nothing to build.
+            continue;
+        }
+
+        match aurum_studio_core::build::run(&request, false, BUILD_TIMEOUT) {
+            Ok(report) if report.replaced => {
+                println!("  rebuilt: {}", report.summary());
+            }
+            Ok(_) => println!("  rebuilt: no change in the artifact"),
+            Err(error) => {
+                // The working library is untouched, which is what lets the
+                // loop keep going.
+                eprintln!("  build failed; the installed extension is unchanged");
+                eprintln!("  {error}");
+            }
+        }
+
+        let _ = &launched;
+    }
+}
+
+/// Launch the editor for a dev session, returning the session and its record.
+fn launch_editor(
+    project: &Project,
+    godot_hint: Option<&Path>,
+) -> Result<(Session, OwnershipRecord), String> {
+    let Some(godot_project) = project.godot_project_dir().map(Path::to_path_buf) else {
+        return Err("no project.godot was found".into());
+    };
+    let Some(godot) = discover_godot_to_launch(project, godot_hint) else {
+        return Err("Godot was not found; pass --godot <path>".into());
+    };
+
+    let session = Session::create(&project.root).map_err(|e| e.to_string())?;
+    let mut request = LaunchRequest::godot(&godot, &godot_project, &project.root);
+    request.environment = bridge_environment(&session, None);
+
+    let launched = launch(&request, &session).map_err(|e| e.to_string())?;
+    Ok((session, launched.record))
+}
+
+/// Classify a batch, reading Rust sources so schema changes are visible.
+fn classify_batch(batch: &[aurum_studio_core::watch::Change]) -> Classification {
+    let pairs: Vec<(PathBuf, Option<String>)> = batch
+        .iter()
+        .filter(|change| change.kind != aurum_studio_core::watch::ChangeKind::Removed)
+        .map(|change| {
+            // Only Rust sources need their contents: the schema markers live
+            // there, and reading every file in a batch would be wasteful.
+            let contents = (change.path.extension().is_some_and(|e| e == "rs"))
+                .then(|| std::fs::read_to_string(&change.path).ok())
+                .flatten();
+            (change.path.clone(), contents)
+        })
+        .collect();
+
+    aurum_studio_core::reload::classify_all(
+        pairs
+            .iter()
+            .map(|(path, contents)| (path.as_path(), contents.as_deref())),
+    )
+}
+
+fn interval(milliseconds: u64) -> std::time::Duration {
+    std::time::Duration::from_millis(milliseconds.clamp(50, 5_000))
+}
+
 /// `aurum projects`
 pub fn projects(args: &[String]) -> ExitCode {
     let options = match parse(args) {
@@ -628,6 +872,14 @@ fn command_usage(command: &str) -> &'static str {
              \n\
              Builds the GDExtension and installs it. A failed build leaves the\n\
              installed library untouched."
+        }
+        "dev" => {
+            "usage: aurum dev [project] [--godot <path>] [--release] [--force]\n\
+             \n\
+             [--once] [--no-editor] [--interval <ms>] [--json]\n\
+             \n\
+             Builds, launches the editor, and rebuilds when the Rust side moves.\n\
+             Godot reloads its own content. Ctrl+C leaves the editor running."
         }
         "editor" => "usage: aurum editor [project] [--godot <path>] [--json]",
         "run" => "usage: aurum run [project] [--godot <path>] [--json]",
