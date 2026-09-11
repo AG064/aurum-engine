@@ -11,6 +11,7 @@ use std::process::ExitCode;
 use aurum_studio_core::build::{library_name, BuildRequest, Profile};
 use aurum_studio_core::build_queue::BuildLock;
 use aurum_studio_core::doctor::{diagnose, Health};
+use aurum_studio_core::gameplay::{respond, Game, Response};
 use aurum_studio_core::ownership::{OwnershipRecord, ProcessKind};
 use aurum_studio_core::project::clean_path;
 use aurum_studio_core::registry::Registry;
@@ -44,6 +45,7 @@ struct Options {
     force: bool,
     once: bool,
     no_editor: bool,
+    play: bool,
     interval_ms: u64,
     port: u16,
     no_open: bool,
@@ -65,6 +67,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--force" => options.force = true,
             "--once" => options.once = true,
             "--no-editor" => options.no_editor = true,
+            "--play" => options.play = true,
             "--no-open" => options.no_open = true,
             "--port" => {
                 index += 1;
@@ -594,6 +597,10 @@ const STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// The supervised loop: build, launch the editor, watch for changes, and
 /// rebuild when the Rust side moves. Godot content is left to Godot, which
 /// reloads it without help.
+///
+/// With `--play` the loop also supervises the game, so the one verdict that
+/// costs a process can be acted on: a change that invalidates live gameplay
+/// restarts the game while the editor keeps running.
 pub fn dev(args: &[String]) -> ExitCode {
     let options = match parse(args) {
         Ok(options) => options,
@@ -677,26 +684,68 @@ pub fn dev(args: &[String]) -> ExitCode {
         return ExitCode::from(exit::OK);
     }
 
-    // ---- editor ----------------------------------------------------------
-    let mut launched: Option<OwnershipRecord> = None;
-    if !options.no_editor {
-        match launch_editor(&project, options.godot.as_deref()) {
-            Ok((session, record)) => {
-                if !options.json {
-                    println!(
-                        "editor running (pid {}), log {}",
-                        record.pid,
-                        session.log_path().display()
-                    );
-                }
-                launched = Some(record);
-            }
-            Err(message) => {
+    // ---- processes -------------------------------------------------------
+    //
+    // The editor and the game share one session, so `aurum stop` finds them
+    // together and a gameplay restart cannot leave the replaced game behind in
+    // a session of its own.
+    let mut session: Option<Session> = None;
+    if !options.no_editor || options.play {
+        match Session::create(&project.root) {
+            Ok(created) => session = Some(created),
+            Err(error) => {
                 // Degraded rather than blocked, per the design: builds and
-                // watching continue without an editor attached.
-                eprintln!("aurum dev: {message}");
-                eprintln!("aurum dev: continuing without an editor attached");
+                // watching continue without processes attached.
+                eprintln!("aurum dev: could not start a session: {error}");
+                eprintln!("aurum dev: continuing without an editor or a game attached");
             }
+        }
+    }
+
+    let mut editor: Option<OwnershipRecord> = None;
+    if !options.no_editor {
+        if let Some(session) = &session {
+            match launch_editor(session, &project, options.godot.as_deref()) {
+                Ok(record) => {
+                    if !options.json {
+                        println!(
+                            "editor running (pid {}), log {}",
+                            record.pid,
+                            session.log_path().display()
+                        );
+                    }
+                    editor = Some(record);
+                }
+                Err(message) => {
+                    // Degraded rather than blocked, per the design: builds and
+                    // watching continue without an editor attached.
+                    eprintln!("aurum dev: {message}");
+                    eprintln!("aurum dev: continuing without an editor attached");
+                }
+            }
+        }
+    }
+
+    let mut game: Option<Game> = None;
+    if options.play {
+        match session.as_ref() {
+            Some(session) => match launch_game(session, &project, options.godot.as_deref()) {
+                Ok((started, pid)) => {
+                    if options.json {
+                        println!("{}", serde_json::json!({ "event": "game", "pid": pid }));
+                    } else {
+                        println!(
+                            "game running (pid {pid}); a change that invalidates it restarts it"
+                        );
+                    }
+                    game = Some(started);
+                }
+                Err(message) => {
+                    eprintln!("aurum dev: {message}");
+                    eprintln!("aurum dev: continuing without a game attached");
+                }
+            },
+            None => eprintln!("aurum dev: --play needs a session the game can belong to"),
         }
     }
 
@@ -706,8 +755,14 @@ pub fn dev(args: &[String]) -> ExitCode {
     let mut debouncer = Debouncer::new(interval(options.interval_ms));
 
     if !options.json {
+        let leaving = match (editor.is_some(), game.is_some()) {
+            (true, true) => "the editor and the game are left running",
+            (true, false) => "the editor is left running",
+            (false, true) => "the game is left running",
+            (false, false) => "nothing is left running",
+        };
         println!(
-            "watching {} ({} files). Ctrl+C to stop; the editor is left running.",
+            "watching {} ({} files). Ctrl+C to stop; {leaving}.",
             project.root.display(),
             watcher.tracked()
         );
@@ -746,33 +801,84 @@ pub fn dev(args: &[String]) -> ExitCode {
         let rebuild = batch
             .iter()
             .any(|change| aurum_studio_core::reload::rebuild_required(&change.path));
-        if !rebuild {
-            // Godot reloads its own content; there is nothing to build.
-            continue;
+
+        let mut installed = true;
+        if rebuild {
+            match aurum_studio_core::build::run(&request, false, BUILD_TIMEOUT) {
+                Ok(report) if report.replaced => {
+                    println!("  rebuilt: {}", report.summary());
+                }
+                Ok(_) => println!("  rebuilt: no change in the artifact"),
+                Err(error) => {
+                    // The working library is untouched, which is what lets the
+                    // loop keep going.
+                    installed = false;
+                    eprintln!("  build failed; the installed extension is unchanged");
+                    eprintln!("  {error}");
+                }
+            }
         }
 
-        match aurum_studio_core::build::run(&request, false, BUILD_TIMEOUT) {
-            Ok(report) if report.replaced => {
-                println!("  rebuilt: {}", report.summary());
-            }
-            Ok(_) => println!("  rebuilt: no change in the artifact"),
-            Err(error) => {
-                // The working library is untouched, which is what lets the
-                // loop keep going.
-                eprintln!("  build failed; the installed extension is unchanged");
-                eprintln!("  {error}");
-            }
+        // A verdict is acted on only once the build it implies has landed:
+        // restarting the game onto a half-installed change would leave it
+        // running something the user cannot see in the sources.
+        if installed {
+            let response = respond(&classification, game.as_mut(), options.force, STOP_TIMEOUT);
+            report_response(
+                classification.verdict,
+                &response,
+                editor.as_ref(),
+                options.json,
+            );
         }
-
-        let _ = &launched;
     }
 }
 
-/// Launch the editor for a dev session, returning the session and its record.
+/// Say what a verdict did, and no more than it did.
+///
+/// A gameplay restart is the only one this loop takes, so it is also the only
+/// one that reports a process moving. An editor restart is reported with the
+/// reason the classifier found and nothing else, because taking it is the
+/// user's decision and needs their unsaved work dealt with first.
+fn report_response(
+    verdict: Verdict,
+    response: &Response,
+    editor: Option<&OwnershipRecord>,
+    json: bool,
+) {
+    if *response == Response::Nothing {
+        return;
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "event": "outcome",
+                "verdict": verdict.label(),
+                "outcome": response.describe(),
+                "restarted": response.restarted(),
+            })
+        );
+        return;
+    }
+
+    println!("  {}", response.describe());
+    // The other half of the criterion, said where it can be checked against a
+    // process list: a gameplay restart is not an editor restart.
+    if response.restarted() {
+        if let Some(editor) = editor {
+            println!("  the editor (pid {}) was not touched", editor.pid);
+        }
+    }
+}
+
+/// Launch the editor into a dev session.
 fn launch_editor(
+    session: &Session,
     project: &Project,
     godot_hint: Option<&Path>,
-) -> Result<(Session, OwnershipRecord), String> {
+) -> Result<OwnershipRecord, String> {
     let Some(godot_project) = project.godot_project_dir().map(Path::to_path_buf) else {
         return Err("no project.godot was found".into());
     };
@@ -780,12 +886,36 @@ fn launch_editor(
         return Err("Godot was not found; pass --godot <path>".into());
     };
 
-    let session = Session::create(&project.root).map_err(|e| e.to_string())?;
     let mut request = LaunchRequest::godot(&godot, &godot_project, &project.root);
-    request.environment = bridge_environment(&session, None);
+    request.environment = bridge_environment(session, None);
 
-    let launched = launch(&request, &session).map_err(|e| e.to_string())?;
-    Ok((session, launched.record))
+    let launched = launch(&request, session).map_err(|e| e.to_string())?;
+    Ok(launched.record)
+}
+
+/// Launch the game this session supervises, so a gameplay restart has
+/// something to replace.
+///
+/// Without `--editor` Godot runs the project's main scene, which is exactly
+/// what a gameplay restart replaces.
+fn launch_game(
+    session: &Session,
+    project: &Project,
+    godot_hint: Option<&Path>,
+) -> Result<(Game, u32), String> {
+    let Some(godot_project) = project.godot_project_dir().map(Path::to_path_buf) else {
+        return Err("no project.godot was found".into());
+    };
+    let Some(godot) = discover_godot_to_launch(project, godot_hint) else {
+        return Err("Godot was not found; pass --godot <path>".into());
+    };
+
+    let mut request = LaunchRequest::godot(&godot, &godot_project, &project.root);
+    request.environment = bridge_environment(session, None);
+
+    let mut game = Game::new(request, session.clone());
+    let pid = game.start().map_err(|e| e.to_string())?;
+    Ok((game, pid))
 }
 
 /// Classify a batch, reading Rust sources so schema changes are visible.
@@ -996,10 +1126,14 @@ fn command_usage(command: &str) -> &'static str {
         "dev" => {
             "usage: aurum dev [project] [--godot <path>] [--release] [--force]\n\
              \n\
-             [--once] [--no-editor] [--interval <ms>] [--json]\n\
+             [--once] [--no-editor] [--play] [--interval <ms>] [--json]\n\
              \n\
              Builds, launches the editor, and rebuilds when the Rust side moves.\n\
-             Godot reloads its own content. Ctrl+C leaves the editor running."
+             Godot reloads its own content. --play also supervises the game, so a\n\
+             change that invalidates live gameplay restarts the game and never the\n\
+             editor. An editor restart is reported with its reason, never taken.\n\
+             --force rebuilds even when the artifact is current, and terminates a\n\
+             game that will not close when asked. Ctrl+C leaves both running."
         }
         "editor" => "usage: aurum editor [project] [--godot <path>] [--json]",
         "run" => "usage: aurum run [project] [--godot <path>] [--json]",
@@ -1038,6 +1172,16 @@ mod tests {
         let options = parse(&args(&["some/path", "--json"])).unwrap();
         assert_eq!(options.positional, vec!["some/path".to_string()]);
         assert!(options.json);
+    }
+
+    #[test]
+    fn the_game_is_supervised_only_when_it_is_asked_for() {
+        // Without this the loop would launch a game nobody wanted, and the
+        // verdict that restarts it would have nothing to act on.
+        assert!(!parse(&args(&[])).unwrap().play);
+        assert!(!parse(&args(&["--no-editor"])).unwrap().play);
+        assert!(parse(&args(&["--play"])).unwrap().play);
+        assert!(parse(&args(&["--play", "--no-editor"])).unwrap().play);
     }
 
     #[test]

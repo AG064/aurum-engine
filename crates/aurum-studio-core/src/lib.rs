@@ -22,6 +22,7 @@
 //! - [`process`] — running children with capture and a bounded wait
 //! - [`ownership`] — proving a process is the one Studio launched
 //! - [`reload`] — what a change costs the running editor
+//! - [`gameplay`] — restarting the game without restarting the editor
 //! - [`session`] — session identity, state directory, and logs
 //! - [`supervise`] — launching and stopping the processes a session owns
 //! - [`supervisor`] — typed commands in, bounded events out, off the caller's thread
@@ -41,6 +42,7 @@
 pub mod build;
 pub mod build_queue;
 pub mod doctor;
+pub mod gameplay;
 pub mod hash;
 pub mod ownership;
 pub mod process;
@@ -58,6 +60,7 @@ pub mod watch;
 pub use build::{BuildError, BuildReport, BuildRequest, Profile};
 pub use build_queue::{BuildLock, BuildQueue, LockError, Submission};
 pub use doctor::{Finding, Health, Report};
+pub use gameplay::{respond, Game, Response, Restart};
 pub use hash::{sha256_file, sha256_hex, Sha256};
 pub use ownership::{LiveProcess, OwnershipRecord, ProcessKind};
 pub use process::{Command, Outcome};

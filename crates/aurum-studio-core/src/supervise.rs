@@ -405,11 +405,7 @@ pub fn stop_session(
         let outcome = terminate(&record, force, timeout);
         // A record for a process that is gone is stale, not an error.
         if outcome.stopped() {
-            let _ = std::fs::remove_file(session.ownership_directory().join(format!(
-                "{}-{}.json",
-                record.kind.label(),
-                record.pid
-            )));
+            let _ = record.remove(&session.ownership_directory());
         }
         let _ = session.log(&format!(
             "{}: {}",

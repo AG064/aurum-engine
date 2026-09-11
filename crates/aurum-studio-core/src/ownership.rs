@@ -61,11 +61,25 @@ impl OwnershipRecord {
     /// Write the record into a session directory.
     pub fn write(&self, directory: &Path) -> std::io::Result<PathBuf> {
         std::fs::create_dir_all(directory)?;
-        let path = directory.join(format!("{}-{}.json", self.kind.label(), self.pid));
+        let path = self.path(directory);
         let text = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         std::fs::write(&path, text)?;
         Ok(path)
+    }
+
+    /// Where this record lives in a session directory.
+    pub fn path(&self, directory: &Path) -> PathBuf {
+        directory.join(format!("{}-{}.json", self.kind.label(), self.pid))
+    }
+
+    /// Forget the record, once the process it describes is gone.
+    ///
+    /// A record left behind for a dead process is not dangerous — the
+    /// ownership check refuses to act on it — but it makes every later report
+    /// about the session mention a process that no longer exists.
+    pub fn remove(&self, directory: &Path) -> std::io::Result<()> {
+        std::fs::remove_file(self.path(directory))
     }
 
     /// Read a record back.
@@ -304,9 +318,33 @@ mod tests {
         let record = record(4242, EXE, "2026-09-11T10:00:00Z");
         let path = record.write(&dir).unwrap();
         assert!(path.is_file(), "the record should exist at {path:?}");
+        assert_eq!(path, record.path(&dir));
 
         let reloaded = OwnershipRecord::read(&path).unwrap();
         assert_eq!(reloaded, record);
+
+        // Forgetting it is how a session stops mentioning a process it has
+        // already stopped.
+        record.remove(&dir).unwrap();
+        assert!(!path.exists());
+        assert!(record.remove(&dir).is_err(), "removing twice is not a promise");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn records_of_different_kinds_do_not_collide() {
+        // A game and an editor can share an identifier across a restart, and
+        // one must not overwrite the other's record.
+        let dir = temp_dir("kinds");
+        let editor = record(7, EXE, "t");
+        let game = OwnershipRecord {
+            kind: ProcessKind::Game,
+            ..record(7, EXE, "t")
+        };
+        assert_ne!(editor.path(&dir), game.path(&dir));
+        editor.write(&dir).unwrap();
+        game.write(&dir).unwrap();
+        assert_eq!(OwnershipRecord::read_all(&dir).len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
