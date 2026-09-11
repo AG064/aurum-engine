@@ -42,6 +42,7 @@
 pub mod build;
 pub mod build_queue;
 pub mod doctor;
+pub mod downloads;
 pub mod gameplay;
 pub mod hash;
 pub mod modules;
