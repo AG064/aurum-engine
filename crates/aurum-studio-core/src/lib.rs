@@ -21,6 +21,7 @@
 //! - [`build`] — building the extension and installing it safely
 //! - [`process`] — running children with capture and a bounded wait
 //! - [`ownership`] — proving a process is the one Studio launched
+//! - [`reload`] — what a change costs the running editor
 //! - [`hash`] — SHA-256, for verifying artifacts
 //!
 //! ## Dependency policy
@@ -40,6 +41,7 @@ pub mod ownership;
 pub mod process;
 pub mod project;
 pub mod registry;
+pub mod reload;
 pub mod toml;
 pub mod toolchain;
 
@@ -50,4 +52,5 @@ pub use ownership::{LiveProcess, OwnershipRecord, ProcessKind};
 pub use process::{Command, Outcome};
 pub use project::{clean_path, ConfigError, Layout, Project, ProjectConfig};
 pub use registry::{Entry, Registry, RegistryError};
+pub use reload::{classify_all, classify_change, classify_path, Classification, Verdict};
 pub use toolchain::{Tool, Toolchain};
