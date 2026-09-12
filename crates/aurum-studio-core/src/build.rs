@@ -581,22 +581,42 @@ mod tests {
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop_writer = stop.clone();
         let writer = std::thread::spawn(move || {
-            let mut size = 0usize;
+            // The length alternates rather than growing, and the loop does not
+            // sleep. Both matter.
+            //
+            // Alternating, because the check keys on the file's length and its
+            // modification time together: on a filesystem with a coarse
+            // timestamp, two same-length writes inside one tick are invisible,
+            // and the file would look settled while it was being rewritten.
+            //
+            // Not sleeping, because a sleep can be stretched past the settle
+            // window by a loaded machine. This test used to sleep ten
+            // milliseconds against a fifty millisecond window, which held on an
+            // idle laptop and failed about one run in four while three other
+            // builds were running. A test that measures the scheduler instead
+            // of the code is worse than no test, because it teaches people to
+            // run it again until it passes.
+            let mut buffer = vec![0u8; 64 * 1024];
+            let mut toggle = false;
             while !stop_writer.load(std::sync::atomic::Ordering::Relaxed) {
-                size += 512;
-                let _ = std::fs::write(&writer_path, vec![0u8; size]);
-                std::thread::sleep(Duration::from_millis(10));
+                toggle = !toggle;
+                buffer.resize(if toggle { 64 * 1024 } else { 64 * 1024 + 1 }, 0);
+                let _ = std::fs::write(&writer_path, &buffer);
             }
         });
 
-        let result =
-            wait_until_stable(&path, Duration::from_millis(50), Duration::from_millis(400));
+        let result = wait_until_stable(
+            &path,
+            Duration::from_millis(150),
+            Duration::from_millis(1200),
+        );
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         writer.join().unwrap();
 
         assert!(
             matches!(result, Err(BuildError::Unstable { .. })),
-            "expected a timeout, got {result:?}"
+            "a file being rewritten in a tight loop never settled, yet wait_until_stable \
+             reported {result:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
