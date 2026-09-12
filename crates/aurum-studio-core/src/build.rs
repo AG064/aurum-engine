@@ -377,6 +377,45 @@ fn locked_message(destination: &Path, error: &std::io::Error) -> String {
 ///
 /// `force` skips the up-to-date check, which is what a user pressing Build
 /// expects.
+/// Run cargo, retrying briefly if the system says the binary is busy.
+///
+/// `ETXTBSY` means the executable is still open for writing somewhere. It
+/// happens when a process forks between another thread opening a file and
+/// closing it, because the child inherits the descriptor, and the failure
+/// surfaces as "Text file busy" at the exec. It is transient by definition —
+/// the holder is on its way to closing it — and it is a real possibility for a
+/// build tool, not only a test artefact: anything that writes a wrapper script
+/// and then runs it can meet this.
+///
+/// Three attempts over about a tenth of a second. Beyond that the holder is not
+/// about to let go, and saying so beats spinning.
+fn run_cargo_with_retry(
+    command: &crate::process::Command,
+    timeout: Duration,
+) -> Result<Outcome, BuildError> {
+    let mut delay = Duration::from_millis(10);
+    for attempt in 0..3 {
+        match command.run(timeout) {
+            Ok(outcome) => return Ok(outcome),
+            Err(error) if error.raw_os_error() == Some(TEXT_FILE_BUSY) && attempt < 2 => {
+                std::thread::sleep(delay);
+                delay *= 3;
+            }
+            Err(error) => {
+                return Err(BuildError::Io(format!("could not run cargo: {error}")));
+            }
+        }
+    }
+    unreachable!("the loop returns on every path")
+}
+
+/// The errno Linux and macOS report for an executable that is still open for
+/// writing. Named rather than spelled 26, which means something else on Windows
+/// and nothing at all to a reader.
+#[cfg(unix)]
+const TEXT_FILE_BUSY: i32 = 26;
+#[cfg(not(unix))]
+const TEXT_FILE_BUSY: i32 = -1;
 pub fn run(
     request: &BuildRequest,
     force: bool,
@@ -404,9 +443,7 @@ pub fn run(
     }
 
     let command = request.command();
-    let outcome: Outcome = command
-        .run(cargo_timeout)
-        .map_err(|e| BuildError::Io(format!("could not run cargo: {e}")))?;
+    let outcome: Outcome = run_cargo_with_retry(&command, cargo_timeout)?;
 
     if !outcome.success() {
         // The destination was never touched, which is the whole point.
@@ -596,12 +633,23 @@ mod tests {
             // builds were running. A test that measures the scheduler instead
             // of the code is worse than no test, because it teaches people to
             // run it again until it passes.
+            // Written to a temporary name and renamed into place, because
+            // `fs::write` truncates before it writes. A reader that samples
+            // inside that window sees an empty file, and on a filesystem whose
+            // modification times are coarse it can see an empty file twice and
+            // conclude the file has settled. Linux CI did exactly that.
+            //
+            // A rename is atomic: a reader sees the old file or the new one,
+            // never a half-written one, and never a zero-length one.
+            let staging = writer_path.with_extension("staging");
             let mut buffer = vec![0u8; 64 * 1024];
             let mut toggle = false;
             while !stop_writer.load(std::sync::atomic::Ordering::Relaxed) {
                 toggle = !toggle;
                 buffer.resize(if toggle { 64 * 1024 } else { 64 * 1024 + 1 }, 0);
-                let _ = std::fs::write(&writer_path, &buffer);
+                if std::fs::write(&staging, &buffer).is_ok() {
+                    let _ = std::fs::rename(&staging, &writer_path);
+                }
             }
         });
 
