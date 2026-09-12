@@ -149,7 +149,9 @@ impl World {
     }
 
     /// Iterate `(Entity, &mut Component)` pairs.
-    pub fn iter_mut<T: Component + Send + Sync>(&mut self) -> impl Iterator<Item = (Entity, &mut T)> {
+    pub fn iter_mut<T: Component + Send + Sync>(
+        &mut self,
+    ) -> impl Iterator<Item = (Entity, &mut T)> {
         self.storages
             .get_mut(&TypeId::of::<T>())
             .and_then(|s| s.as_any_mut().downcast_mut::<ComponentMap<T>>())
@@ -230,7 +232,10 @@ mod tests {
         world.insert(e, Velocity { dx: 1.0, dy: 2.0 });
 
         assert_eq!(world.get::<Position>(e), Some(&Position { x: 0.0, y: 0.0 }));
-        assert_eq!(world.get::<Velocity>(e), Some(&Velocity { dx: 1.0, dy: 2.0 }));
+        assert_eq!(
+            world.get::<Velocity>(e),
+            Some(&Velocity { dx: 1.0, dy: 2.0 })
+        );
     }
 
     #[test]

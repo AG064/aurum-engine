@@ -17,8 +17,8 @@
 //! - Save to disk. The caller serializes `Story` state to JSON.
 //! - Localization. Keys are exposed; the caller resolves them.
 
-mod story;
 mod interpreter;
+mod story;
 
-pub use story::{Choice, ChoiceEntry, DialogueEntry, Entry, Scene, Story, StoryError, VarValue};
 pub use interpreter::{ChoiceData, Event, Interpreter, InterpreterState};
+pub use story::{Choice, ChoiceEntry, DialogueEntry, Entry, Scene, Story, StoryError, VarValue};

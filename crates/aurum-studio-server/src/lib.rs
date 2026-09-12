@@ -989,7 +989,11 @@ mod tests {
         let findings = json["findings"]
             .as_array()
             .expect("the findings should be a list the page can walk");
-        assert_eq!(findings.len(), 2, "no finding may be dropped on the way out");
+        assert_eq!(
+            findings.len(),
+            2,
+            "no finding may be dropped on the way out"
+        );
         assert_eq!(findings[0]["id"], "cargo_manifest");
         assert_eq!(findings[0]["health"], "blocked");
         assert_eq!(findings[0]["summary"], "no Cargo.toml at the project root");

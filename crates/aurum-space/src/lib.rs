@@ -494,14 +494,21 @@ impl SpaceSimulation {
         let boost = input.boost && self.state.fuel > 0.0;
         self.state.boost_active = boost;
 
-        let local_velocity = self.state.orientation.inverse_rotate_vector(self.state.velocity);
+        let local_velocity = self
+            .state
+            .orientation
+            .inverse_rotate_vector(self.state.velocity);
         let local_thrust = Vec3::new(
             input.thrust_lateral,
             input.thrust_vertical,
             -input.thrust_forward,
         )
         .clamp_length(1.0);
-        let thrust_multiplier = if boost { config.boost_multiplier.max(1.0) } else { 1.0 };
+        let thrust_multiplier = if boost {
+            config.boost_multiplier.max(1.0)
+        } else {
+            1.0
+        };
         let acceleration = config.thrust_n.max(0.0) / config.mass_kg.max(1.0) * thrust_multiplier;
         let mut local_acceleration = local_thrust * acceleration;
 
@@ -514,15 +521,14 @@ impl SpaceSimulation {
 
         let world_acceleration = self.state.orientation.rotate_vector(local_acceleration);
         self.state.velocity += world_acceleration * dt;
-        self.state.velocity = self.state.velocity.clamp_length(config.max_speed_mps.max(0.0));
+        self.state.velocity = self
+            .state
+            .velocity
+            .clamp_length(config.max_speed_mps.max(0.0));
         self.state.position.translate(self.state.velocity * dt);
 
-        let desired_angular_velocity = Vec3::new(
-            input.pitch,
-            -input.yaw,
-            input.roll,
-        )
-        .clamp_length(1.0)
+        let desired_angular_velocity = Vec3::new(input.pitch, -input.yaw, input.roll)
+            .clamp_length(1.0)
             * config.max_rotation_rate_rad_s.max(0.0);
         let angular_delta = desired_angular_velocity - self.state.angular_velocity;
         let max_delta = config.rotation_accel_rad_s2.max(0.0) * dt;
@@ -532,7 +538,10 @@ impl SpaceSimulation {
             self.state.angular_velocity = desired_angular_velocity;
         }
         if input.flight_assist && desired_angular_velocity.length_squared() <= f32::EPSILON {
-            self.state.angular_velocity = self.state.angular_velocity.lerp(Vec3::ZERO, (config.flight_assist_damping * dt).clamp(0.0, 1.0));
+            self.state.angular_velocity = self.state.angular_velocity.lerp(
+                Vec3::ZERO,
+                (config.flight_assist_damping * dt).clamp(0.0, 1.0),
+            );
         }
         let rotation_delta = Quat::from_local_angular_velocity(self.state.angular_velocity, dt);
         self.state.orientation = (self.state.orientation * rotation_delta).normalized();

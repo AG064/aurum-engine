@@ -118,10 +118,16 @@ pub struct ChoiceBlock {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Entry {
     Dialogue(DialogueEntry),
-    Choice { choices: Vec<ChoiceEntry> },
+    Choice {
+        choices: Vec<ChoiceEntry>,
+    },
     Quit,
-    Goto { target: String },
-    Text { data: String },
+    Goto {
+        target: String,
+    },
+    Text {
+        data: String,
+    },
     Set(SetOp),
     Branch {
         condition: Condition,

@@ -3,9 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::story::{
-    Condition, Entry, Scene, SetOp, Story, StoryError, VarValue,
-};
+use crate::story::{Condition, Entry, Scene, SetOp, Story, StoryError, VarValue};
 
 /// Events emitted by the interpreter. The presentation layer (GDScript or
 /// another Rust module) turns these into pixels and sounds.
@@ -111,10 +109,7 @@ impl Interpreter {
             let scene = match self.story.scene(&self.state.current_scene) {
                 Some(s) => s,
                 None => {
-                    return Event::Error(format!(
-                        "scene '{}' not found",
-                        self.state.current_scene
-                    ));
+                    return Event::Error(format!("scene '{}' not found", self.state.current_scene));
                 }
             };
 
@@ -133,18 +128,20 @@ impl Interpreter {
             self.state.pending_choice_indices.clear();
 
             match entry {
-                Entry::Dialogue(d) => return Event::Dialogue {
-                    speaker: d.speaker,
-                    text: d.text,
-                    character: d.character,
-                    position: d.position,
-                    background: d.background,
-                    emotion: d.emotion,
-                    presentation: d.presentation,
-                    text_key: d.text_key,
-                    speaker_key: d.speaker_key,
-                    append: d.append,
-                },
+                Entry::Dialogue(d) => {
+                    return Event::Dialogue {
+                        speaker: d.speaker,
+                        text: d.text,
+                        character: d.character,
+                        position: d.position,
+                        background: d.background,
+                        emotion: d.emotion,
+                        presentation: d.presentation,
+                        text_key: d.text_key,
+                        speaker_key: d.speaker_key,
+                        append: d.append,
+                    }
+                }
                 Entry::Choice { choices } => {
                     let mut visible: Vec<(usize, &crate::story::ChoiceEntry)> = Vec::new();
                     for (i, c) in choices.iter().enumerate() {
@@ -170,8 +167,7 @@ impl Interpreter {
                     }
                     let entry_index = idx;
                     self.state.pending_choice_entry = Some(entry_index);
-                    self.state.pending_choice_indices =
-                        visible.iter().map(|(i, _)| *i).collect();
+                    self.state.pending_choice_indices = visible.iter().map(|(i, _)| *i).collect();
                     let data: Vec<ChoiceData> = visible
                         .into_iter()
                         .map(|(_, c)| ChoiceData {
@@ -347,9 +343,7 @@ impl Interpreter {
             for (k, v) in vars {
                 let value = match v {
                     serde_json::Value::Bool(b) => VarValue::Bool(*b),
-                    serde_json::Value::Number(n) => {
-                        VarValue::Number(n.as_f64().unwrap_or(0.0))
-                    }
+                    serde_json::Value::Number(n) => VarValue::Number(n.as_f64().unwrap_or(0.0)),
                     serde_json::Value::String(s) => VarValue::String(s.clone()),
                     _ => continue,
                 };
@@ -423,10 +417,7 @@ fn value_is_truthy(v: Option<&VarValue>) -> bool {
     }
 }
 
-fn apply_set(
-    op: &SetOp,
-    vars: &mut BTreeMap<String, VarValue>,
-) -> Result<(), StoryError> {
+fn apply_set(op: &SetOp, vars: &mut BTreeMap<String, VarValue>) -> Result<(), StoryError> {
     if !is_valid_var_name(&op.variable) {
         return Err(StoryError::InvalidVarName(op.variable.clone()));
     }
@@ -472,10 +463,7 @@ fn apply_set(
     Ok(())
 }
 
-fn numbers(
-    op: &SetOp,
-    vars: &BTreeMap<String, VarValue>,
-) -> Result<(f64, f64), StoryError> {
+fn numbers(op: &SetOp, vars: &BTreeMap<String, VarValue>) -> Result<(f64, f64), StoryError> {
     let l = vars
         .get(&op.variable)
         .and_then(value_as_f64)
@@ -496,7 +484,10 @@ fn is_valid_var_name(s: &str) -> bool {
 }
 
 fn is_supported_var_value(v: &VarValue) -> bool {
-    matches!(v, VarValue::Bool(_) | VarValue::Number(_) | VarValue::String(_))
+    matches!(
+        v,
+        VarValue::Bool(_) | VarValue::Number(_) | VarValue::String(_)
+    )
 }
 
 #[cfg(test)]
