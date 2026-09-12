@@ -45,4 +45,4 @@ pub use cli::{parse_args_slice, run, Options, USAGE};
 pub use engine::{runtime_fingerprint, DynamicEvent, Engine, EngineError};
 pub use protocol::{Incoming, RpcError};
 pub use server::{serve, ServerConfig};
-pub use tools::{catalog, find, list_payload, list_payload_for, PathGuard, Tool, ToolError};
+pub use tools::{catalog, find, list_payload_with, PathGuard, Tool, ToolError};

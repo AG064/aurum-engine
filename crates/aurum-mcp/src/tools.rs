@@ -1246,16 +1246,6 @@ pub fn find(name: &str) -> Option<Tool> {
     catalog().into_iter().find(|t| t.name == name)
 }
 
-/// The `tools/list` payload.
-pub fn list_payload() -> Value {
-    list_payload_with(false, &[])
-}
-
-/// The `tools/list` payload, restricted to read-only tools alone.
-pub fn list_payload_for(read_only_only: bool) -> Value {
-    list_payload_with(read_only_only, &[])
-}
-
 /// The `tools/list` payload under the server's effective permissions.
 ///
 /// Withheld tools are **omitted rather than merely refused**, so a client never
@@ -1265,6 +1255,13 @@ pub fn list_payload_for(read_only_only: bool) -> Value {
 ///
 /// The status tool is never omitted, for the same reason it can never be
 /// denied — a client has to be able to find out what it is missing.
+///
+/// There is deliberately no argument-less `list_payload()`. There was one, and
+/// a `list_payload_for(read_only_only)` beside it, and between them they made
+/// it easy to build a payload that ignored the server's permissions — the
+/// exact mistake that puts a tool in front of a client that will always refuse
+/// it. The two parameters are not decoration; making a caller write `false,
+/// &[]` to mean "unrestricted" is the point.
 pub fn list_payload_with(read_only_only: bool, denied: &[String]) -> Value {
     let tools: Vec<Value> = catalog()
         .iter()
@@ -1338,7 +1335,7 @@ mod tests {
 
     #[test]
     fn read_only_tools_are_annotated() {
-        let payload = list_payload();
+        let payload = list_payload_with(false, &[]);
         let tools = payload["tools"].as_array().unwrap();
         assert!(!tools.is_empty());
         let snapshot = tools

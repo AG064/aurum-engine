@@ -151,6 +151,27 @@ A failed build keeps the last working DLL. A rejected native reload warns that a
 controlled editor restart may be required. See `docs/HOT_RELOAD.md` for the
 tested boundary and live product-path evidence.
 
+## Known issues
+
+**Godot 4.7 exits with an access violation at the end of the first headless
+import of any project that loads a GDExtension.** The import itself finishes —
+the editor settings are saved before it dies — so the only symptom is a
+non-zero exit code from `godot --headless --path . --import`.
+
+It is not this engine's code. It reproduces with a fifteen-line GDExtension
+that registers a single empty `Node` subclass, and it does not happen on a
+second import, on a windowed import, or in a project with no extension at all.
+Running the import twice leaves the second run a clean no-op, which is what
+`aurum build` and `scripts/setup.ps1` in a downstream project do.
+
+Reproduction, in a project with one `.gdextension`:
+
+```powershell
+Remove-Item -Recurse -Force .godot
+godot --headless --path . --import   # import completes; exit code is -1073741819
+godot --headless --path . --import   # nothing to do; exit code is 0
+```
+
 ## Naming
 
 - **Aurum** is Latin for "gold".
