@@ -484,6 +484,23 @@ mod tests {
         path
     }
 
+    /// The line ending of whichever shell the fixtures below are written for.
+    ///
+    /// These are shell scripts for the host, and batch and `sh` are not the
+    /// same language. Writing `\r\n` into a `#!/bin/sh` file is what made every
+    /// build test fail on Linux and macOS with "Bad fd number": the carriage
+    /// return ends up inside the command, so `1>&2` reads as `1>&2\r`.
+    const NL: &str = if cfg!(windows) { "\r\n" } else { "\n" };
+
+    /// A shell command that creates an empty file.
+    fn touch(path: &Path) -> String {
+        if cfg!(windows) {
+            format!("copy /Y NUL \"{}\" > NUL", path.display())
+        } else {
+            format!(": > \"{}\"", path.display())
+        }
+    }
+
     fn request_for(dir: &Path, cargo: PathBuf) -> BuildRequest {
         // A real build always has a workspace to run in; spawning would fail
         // with an invalid-directory error if it did not exist.
@@ -647,7 +664,7 @@ mod tests {
     #[test]
     fn a_failed_build_leaves_the_installed_library_untouched() {
         let dir = temp_dir("failed-build");
-        let cargo = fake_cargo(&dir, "echo a compiler error 1>&2\r\nexit 101");
+        let cargo = fake_cargo(&dir, &format!("echo a compiler error 1>&2{NL}exit 101"));
         let request = request_for(&dir, cargo);
 
         std::fs::create_dir_all(request.destination.parent().unwrap()).unwrap();
@@ -681,14 +698,7 @@ mod tests {
             .join(format!("aurum_godot.{}", dynamic_library_extension()));
         std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
 
-        let cargo = fake_cargo(
-            &dir,
-            &format!(
-                "echo building\r\ncopy /Y NUL \"{}\" > NUL\r\necho fake library> \"{}\"",
-                artifact.display(),
-                artifact.display()
-            ),
-        );
+        let cargo = fake_cargo(&dir, &format!("echo building{NL}{}", touch(&artifact)));
         let request = request_for(&dir, cargo);
 
         let report = run(&request, true, Duration::from_secs(30)).unwrap();
@@ -754,7 +764,7 @@ mod tests {
     #[test]
     fn a_cargo_that_succeeds_without_producing_an_artifact_is_reported() {
         let dir = temp_dir("no-artifact");
-        let cargo = fake_cargo(&dir, "echo nothing to see\r\nexit 0");
+        let cargo = fake_cargo(&dir, &format!("echo nothing to see{NL}exit 0"));
         let request = request_for(&dir, cargo);
 
         let result = run(&request, true, Duration::from_secs(30));

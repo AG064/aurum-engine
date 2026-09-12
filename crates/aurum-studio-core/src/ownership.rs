@@ -284,7 +284,39 @@ fn parse_ps_line(output: &str) -> Option<(PathBuf, Option<String>)> {
     if executable.is_empty() {
         return None;
     }
-    Some((PathBuf::from(executable.join(" ")), Some(start.join(" "))))
+    let path = PathBuf::from(executable.join(" "));
+    Some((resolve_to_a_file(&path), Some(start.join(" "))))
+}
+
+/// Turn whatever `ps` reported into a path that can be checked against the disk.
+///
+/// `ps` does not always report the resolved path: a process started as `sleep`
+/// rather than `/bin/sleep` can come back as the bare name. A record holding a
+/// name rather than a file cannot be verified against the filesystem, and
+/// verifying every field is the whole point of the record — so a bare name is
+/// looked up on `PATH`, and the result is what gets stored.
+///
+/// If nothing on `PATH` matches, the original comes back unchanged. A record
+/// naming something unfindable is a record that will refuse to stop a process,
+/// which is the safe direction to fail in.
+#[cfg(any(target_os = "macos", test))]
+fn resolve_to_a_file(path: &Path) -> PathBuf {
+    if path.is_absolute() || path.is_file() {
+        return path.to_path_buf();
+    }
+    let Some(name) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    let Some(search) = std::env::var_os("PATH") else {
+        return path.to_path_buf();
+    };
+    for directory in std::env::split_paths(&search) {
+        let candidate = directory.join(name);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    path.to_path_buf()
 }
 
 #[cfg(test)]
@@ -491,6 +523,32 @@ mod tests {
         assert_eq!(ProcessKind::Editor.label(), "editor");
         assert_eq!(ProcessKind::Game.label(), "game");
         assert_eq!(ProcessKind::Worker.label(), "worker");
+    }
+
+    #[test]
+    fn a_bare_name_is_looked_up_on_path() {
+        // The failure this exists for: a process started as `sleep` came back
+        // from `ps` as `sleep`, and a record holding that cannot be checked
+        // against the filesystem, so the launch that should have been recorded
+        // was refused instead.
+        //
+        // `cargo` is used rather than a program invented for the test, because
+        // the test only means something if the thing being resolved is real.
+        let search: Vec<PathBuf> = std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).collect())
+            .unwrap_or_default();
+        if let Some(found) = search.iter().map(|d| d.join("cargo")).find(|c| c.is_file()) {
+            assert_eq!(resolve_to_a_file(Path::new("cargo")), found);
+        }
+        // An absolute path is never second-guessed.
+        let absolute = PathBuf::from("/definitely/not/here");
+        assert_eq!(resolve_to_a_file(&absolute), absolute);
+        // And something that is nowhere comes back as it went in, so the
+        // record is refused rather than pointing at the wrong file.
+        assert_eq!(
+            resolve_to_a_file(Path::new("no-such-program-anywhere")),
+            PathBuf::from("no-such-program-anywhere")
+        );
     }
 
     #[test]
