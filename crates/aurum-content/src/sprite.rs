@@ -176,7 +176,7 @@ impl AtlasImage {
     /// A solid colour image.
     pub fn filled(width: u32, height: u32, rgba: [u8; 4]) -> Self {
         let mut image = Self::new(width, height);
-        for pixel in image.pixels.chunks_exact_mut(4) {
+        for pixel in image.pixels.as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&rgba);
         }
         image
@@ -409,7 +409,7 @@ mod tests {
     fn png_round_trips_a_large_image_across_multiple_blocks() {
         // Larger than one 65535-byte stored block, to exercise the chunking.
         let mut image = AtlasImage::new(200, 120);
-        for (i, pixel) in image.pixels.chunks_exact_mut(4).enumerate() {
+        for (i, pixel) in image.pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             pixel.copy_from_slice(&[(i % 251) as u8, (i % 241) as u8, (i % 239) as u8, 255]);
         }
         let png = image.to_png().unwrap();

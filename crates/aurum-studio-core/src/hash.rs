@@ -71,16 +71,15 @@ impl Sha256 {
             }
         }
 
-        // Then whole blocks, straight from the input.
-        let mut chunks = data.chunks_exact(64);
-        for chunk in &mut chunks {
-            let mut block = [0u8; 64];
-            block.copy_from_slice(chunk);
-            self.compress(&block);
+        // Then whole blocks, straight from the input. `as_chunks` hands back
+        // the remainder alongside them and the blocks are already arrays, so
+        // there is nothing to copy into a fixed-size buffer.
+        let (blocks, remainder) = data.as_chunks::<64>();
+        for block in blocks {
+            self.compress(block);
         }
 
         // Whatever is left waits for the next call.
-        let remainder = chunks.remainder();
         if !remainder.is_empty() {
             self.buffer[..remainder.len()].copy_from_slice(remainder);
             self.buffered = remainder.len();

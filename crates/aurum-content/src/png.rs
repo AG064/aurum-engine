@@ -464,7 +464,7 @@ pub fn decode(bytes: &[u8]) -> Result<AtlasImage, PngError> {
                 }
             }
             b"PLTE" => {
-                palette = data.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+                palette = data.as_chunks::<3>().0.to_vec();
             }
             b"tRNS" => transparency = Some(data.to_vec()),
             b"IDAT" => compressed.extend_from_slice(data),
@@ -748,7 +748,7 @@ mod tests {
 
     fn round_trip(width: u32, height: u32, fill: impl Fn(usize) -> [u8; 4]) -> AtlasImage {
         let mut source = AtlasImage::new(width, height);
-        for (index, pixel) in source.pixels.chunks_exact_mut(4).enumerate() {
+        for (index, pixel) in source.pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             pixel.copy_from_slice(&fill(index));
         }
         let encoded = encode_png(width, height, &source.pixels).unwrap();
@@ -812,7 +812,7 @@ mod tests {
         lsb(1, 2, &mut bits); // BTYPE = fixed
 
         // Fixed Huffman: literals 0-143 use code 0x30 + symbol, 8 bits.
-        for symbol in [b'a', b'b', b'c'] {
+        for symbol in *b"abc" {
             msb(0x30 + symbol as u32, 8, &mut bits);
         }
         msb(0, 7, &mut bits); // end of block, symbol 256, 7 bits

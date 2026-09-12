@@ -221,7 +221,7 @@ impl Mesh {
     /// keeps its split vertices and stays faceted.
     pub fn compute_normals(&mut self) {
         let mut accum = vec![[0.0f32; 3]; self.positions.len()];
-        for tri in self.indices.chunks_exact(3) {
+        for tri in self.indices.as_chunks::<3>().0 {
             let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
             let (Some(&p0), Some(&p1), Some(&p2)) = (
                 self.positions.get(i0),
@@ -280,7 +280,7 @@ impl Mesh {
             *n = normalize3(transformed);
         }
         if matrix.determinant3() < 0.0 {
-            for tri in self.indices.chunks_exact_mut(3) {
+            for tri in self.indices.as_chunks_mut::<3>().0 {
                 tri.swap(1, 2);
             }
         }

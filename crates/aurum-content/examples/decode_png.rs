@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut opaque = 0usize;
     let mut transparent = 0usize;
     let mut sum = [0u64; 4];
-    for pixel in image.pixels.chunks_exact(4) {
+    for pixel in image.pixels.as_chunks::<4>().0 {
         if pixel[3] == 0 {
             transparent += 1;
         } else {

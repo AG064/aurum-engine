@@ -2083,7 +2083,7 @@ mod tests {
 
         // Write a real PNG to slice, using the crate's own encoder.
         let mut sheet = aurum_content::sprite::AtlasImage::new(64, 32);
-        for (index, pixel) in sheet.pixels.chunks_exact_mut(4).enumerate() {
+        for (index, pixel) in sheet.pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let column = index % 64;
             pixel.copy_from_slice(&[(column * 4) as u8, 0, 0, if column < 32 { 255 } else { 0 }]);
         }

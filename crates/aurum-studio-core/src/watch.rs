@@ -267,13 +267,35 @@ mod tests {
         dir
     }
 
-    /// Write a file with content that differs each time, so a modification is
-    /// detectable even when the length matches.
+    /// Write a file, creating its directory if it is not there.
     fn write(path: &Path, content: &str) {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(path, content).unwrap();
+    }
+
+    /// Rewrite a file until the watcher notices, or give up.
+    ///
+    /// A watcher keyed on `(modified, length)` cannot see a rewrite that lands
+    /// inside the filesystem's timestamp granularity: the length is the same by
+    /// design, and the clock has not moved. That is a property of the clock
+    /// rather than of the watcher, and it is why `a_modified_file_is_reported`
+    /// passed here and failed on CI — same code, coarser timestamps.
+    ///
+    /// Sleeping a magic number would trade a flake for a slower flake. Writing
+    /// until the clock moves is the honest version, and the attempt limit means
+    /// a filesystem that never moves it fails the test instead of hanging it.
+    fn rewrite_until_seen(watcher: &mut Watcher, path: &Path, content: &str) -> Vec<Change> {
+        for _ in 0..100 {
+            write(path, content);
+            let changes = watcher.scan();
+            if !changes.is_empty() {
+                return changes;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("the watcher never saw {path:?} change, across a hundred rewrites");
     }
 
     #[test]
@@ -320,9 +342,10 @@ mod tests {
         let mut watcher = Watcher::new(&root);
         watcher.scan();
 
-        // Same length, different bytes: length alone would miss this.
-        write(&file, "fn b() {}");
-        let changes = watcher.scan();
+        // Same length, different bytes. The length cannot give this away, so
+        // the timestamp has to, which is why the rewrite is repeated until the
+        // clock agrees rather than fired once and hoped for.
+        let changes = rewrite_until_seen(&mut watcher, &file, "fn b() {}");
         assert_eq!(changes.len(), 1, "{changes:?}");
         assert_eq!(changes[0].kind, ChangeKind::Modified);
         let _ = std::fs::remove_dir_all(&root);
