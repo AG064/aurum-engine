@@ -35,12 +35,19 @@ OPTIONS:
     --editor-bridge <DIR>
                     Directory the Aurum Editor plugin polls, enabling the
                     aurum_editor_* tools. The plugin prints the path it uses.
-    -h, --help      Print this help.
+    --print-config <client>
+                    Print the configuration for a client, and write nothing.
+    --install <client>[,<client>...]
+                    Write it into that client's configuration file, merging
+                    with whatever is already there.
+    -h, --help      Print this help, including how to connect an agent.
     -V, --version   Print the version.
 
 EXAMPLES:
     aurum mcp --root ./saves
     aurum mcp --read-only
+    aurum mcp --install codex,claude-code
+
 ";
 
 /// Parsed command-line options.
@@ -64,11 +71,43 @@ pub fn parse_args_slice(args: &[String]) -> Result<Option<Options>, String> {
         let arg = args[index].as_str();
         match arg {
             "-h" | "--help" => {
-                print!("{USAGE}");
+                print!("{USAGE}\n{}", crate::connect::CONNECT_HELP);
                 return Ok(None);
             }
             "-V" | "--version" => {
                 println!("aurum-mcp {}", env!("CARGO_PKG_VERSION"));
+                return Ok(None);
+            }
+            // Connecting an agent is a command on this binary rather than a
+            // separate tool, because the thing being connected *is* this
+            // binary. Two entry points would be two things to keep in step.
+            "--print-config" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--print-config requires a client name".to_string())?;
+                let client = crate::connect::Client::parse(value)
+                    .ok_or_else(|| crate::connect::unknown_client(value))?;
+                let invocation = crate::connect::Invocation::current(root.as_deref());
+                println!("{}", crate::connect::snippet(client, &invocation));
+                return Ok(None);
+            }
+            "--install" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--install requires a client name".to_string())?;
+                let project = std::env::current_dir()
+                    .map_err(|e| format!("cannot read the working directory: {e}"))?;
+                let invocation = crate::connect::Invocation::current(root.as_deref());
+                for name in value.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+                    let client = crate::connect::Client::parse(name)
+                        .ok_or_else(|| crate::connect::unknown_client(name))?;
+                    match crate::connect::install(client, &project, &invocation) {
+                        Ok(message) => println!("{:<16} {message}", client.name()),
+                        Err(message) => eprintln!("{:<16} {message}", client.name()),
+                    }
+                }
                 return Ok(None);
             }
             "--read-only" => config.read_only = true,
