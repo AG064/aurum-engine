@@ -258,6 +258,16 @@ pub fn terminate(record: &OwnershipRecord, force: bool, timeout: Duration) -> St
         }
         // It is alive and declined to close. Reported as such rather than as a
         // refusal, so the caller can offer to force it.
+        //
+        // Windows only, because only Windows has this answer. `taskkill`
+        // distinguishes "delivered" from "the process will not close without
+        // being forced", and that distinction is worth carrying to the caller.
+        // A Unix signal has no such reply: it is delivered or it is not, and
+        // whether it was honoured is decided by waiting, which is the
+        // `Requested` arm above. Gating the variant is not tidiness — an
+        // unconstructed variant is a dead-code error under `-D warnings`, so
+        // leaving it unconditional fails the build on Linux and macOS.
+        #[cfg(windows)]
         CloseRequest::Declined(reason) => {
             if force {
                 StopOutcome::Refused(reason)
@@ -278,6 +288,7 @@ enum CloseRequest {
     /// question, answered by waiting.
     Requested,
     /// The process is alive and will not close without being forced.
+    #[cfg(windows)]
     Declined(String),
     /// The request could not be delivered.
     Failed(String),

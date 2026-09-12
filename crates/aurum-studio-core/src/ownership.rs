@@ -11,10 +11,17 @@
 //! process is not.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+// Only the Windows path shells out. On Unix the process query reads /proc
+// directly, so importing the command runner there leaves an unused import that
+// `-D warnings` turns into a build failure — on two of the three platforms CI
+// builds, which is why this was invisible from a Windows desk.
+#[cfg(windows)]
+use std::time::Duration;
+
+#[cfg(windows)]
 use crate::process::Command;
 
 /// What a recorded process is.
@@ -153,6 +160,7 @@ impl LiveProcess {
 }
 
 /// How long to wait for the platform to answer a process query.
+#[cfg(windows)]
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Ask the operating system about a process.
