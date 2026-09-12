@@ -12,8 +12,8 @@ starting your own project on top of Aurum.
 ## Clone and build
 
 ```pwsh
-git clone https://github.com/AG064/aurum-engine.git
-cd aurum-engine
+git clone https://github.com/AG064/aurum-studio.git
+cd aurum-studio
 
 # Build the engine and copy the DLL into the Godot project
 pwsh scripts/build.ps1

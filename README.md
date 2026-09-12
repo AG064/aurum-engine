@@ -6,7 +6,7 @@ Aurum is one engine for many game genres. You write game logic in GDScript
 and the engine layer in Rust. Hot-reload stays fast because GDScript
 and scenes are unchanged — only the Rust crate boundary is slower.
 
-[![CI](https://github.com/AG064/aurum-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/AG064/aurum-engine/actions/workflows/ci.yml)
+[![CI](https://github.com/AG064/aurum-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/AG064/aurum-studio/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 [![Godot](https://img.shields.io/badge/godot-4.7-blue.svg)](https://godotengine.org)
@@ -54,7 +54,7 @@ project at a different path, pass `-GodotProject <path>`.
 ## Repository layout
 
 ```
-aurum-engine/                  # Cargo workspace root
+aurum-studio/                  # Cargo workspace root
 ├── Cargo.toml                 # workspace manifest
 ├── crates/
 │   ├── aurum-core/            # pure Rust engine (tested)
@@ -99,7 +99,7 @@ aurum-engine/                  # Cargo workspace root
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ Your game (in a separate repo, sibling to aurum-engine)     │
+│ Your game (in a separate repo, sibling to aurum-studio)     │
 │ - Scenes, UI, art, audio                                     │
 │ - GDScript game logic (hot-reloads in <100ms)                │
 └──────────────────────────────────────────────────────────────┘

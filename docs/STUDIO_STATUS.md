@@ -28,7 +28,7 @@ is met differently. Revisit only if a window is wanted for its own sake.
 
 **Met.** `aurum import` registers a project read-only; `aurum projects` lists
 it; `aurum forget` removes it. The registry never writes into a project.
-`aurum doctor` runs against `A:\RecoveredProjects\C_Drive\Game_Development\aurum-engine`
+`aurum doctor` runs against `A:\RecoveredProjects\C_Drive\Game_Development\aurum-studio`
 and reports 12 ok, 0 warnings, 0 blocked.
 
 ### `doctor` distinguishes healthy, warning, and blocked state with evidence
