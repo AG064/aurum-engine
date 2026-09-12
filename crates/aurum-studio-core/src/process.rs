@@ -347,7 +347,12 @@ mod tests {
     #[test]
     fn arguments_are_passed_as_a_list_not_a_shell_string() {
         let command = echo_command("one two");
-        assert_eq!(command.arguments().len(), 3, "cmd /c echo <text>");
+        // Two on Windows, where the helper carries `cmd /c` in front of the
+        // program, and none elsewhere, where the program is the whole command.
+        // Asserting the Windows count everywhere is how this test failed on
+        // macOS while the behaviour it exists to check was perfectly fine.
+        let expected = if cfg!(windows) { 3 } else { 1 };
+        assert_eq!(command.arguments().len(), expected);
         // A shell would have split this into two arguments.
         let outcome = command.run(PROBE_TIMEOUT).unwrap();
         assert!(outcome.stdout.contains("one two"), "{outcome:?}");

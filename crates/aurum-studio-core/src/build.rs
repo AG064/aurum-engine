@@ -472,8 +472,15 @@ mod tests {
 
     #[cfg(not(windows))]
     fn fake_cargo(dir: &Path, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
         let path = dir.join("fake-cargo.sh");
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        // Unix will not run a script that is not executable, and a new file is
+        // 0644. Without this every build test fails with "could not run cargo:
+        // Permission denied", which reads as a fault in the build code rather
+        // than in the fixture standing in for it.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
     }
 

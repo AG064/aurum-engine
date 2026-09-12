@@ -14,14 +14,14 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-// Only the Windows path shells out. On Unix the process query reads /proc
-// directly, so importing the command runner there leaves an unused import that
-// `-D warnings` turns into a build failure — on two of the three platforms CI
-// builds, which is why this was invisible from a Windows desk.
-#[cfg(windows)]
+// Only Windows and macOS shell out. Linux reads /proc directly, so importing
+// the command runner there leaves an unused import, and `-D warnings` turns an
+// unused import into a build failure — on one of the three platforms CI builds,
+// which is why this was invisible from a Windows desk.
+#[cfg(any(windows, target_os = "macos"))]
 use std::time::Duration;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use crate::process::Command;
 
 /// What a recorded process is.
@@ -160,7 +160,7 @@ impl LiveProcess {
 }
 
 /// How long to wait for the platform to answer a process query.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Ask the operating system about a process.
@@ -224,7 +224,8 @@ fn inspect_windows(pid: u32) -> Option<LiveProcess> {
     })
 }
 
-#[cfg(not(windows))]
+/// Ask Linux about a process, through `/proc`.
+#[cfg(target_os = "linux")]
 fn inspect_unix(pid: u32) -> Option<LiveProcess> {
     let executable = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
     // Field 22 of /proc/<pid>/stat is the start time in clock ticks; it is
@@ -237,6 +238,53 @@ fn inspect_unix(pid: u32) -> Option<LiveProcess> {
         executable,
         started,
     })
+}
+
+/// Ask macOS about a process, through `ps`.
+///
+/// There is no `/proc` here, so the previous code — which read one — answered
+/// `None` for every process. The consequence was not a missing nicety: a
+/// session that cannot describe a process cannot prove it owns it, so on macOS
+/// `aurum stop` would refuse to stop anything Studio had launched.
+///
+/// `lstart` is five fields, and `comm` is whatever follows them. Splitting on
+/// the field count rather than on a separator is what keeps an executable path
+/// containing spaces intact.
+#[cfg(target_os = "macos")]
+fn inspect_unix(pid: u32) -> Option<LiveProcess> {
+    let outcome = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "lstart=,comm="])
+        .run(INSPECT_TIMEOUT)
+        .ok()?;
+    if !outcome.success() {
+        return None;
+    }
+    let (executable, started) = parse_ps_line(&outcome.stdout)?;
+    Some(LiveProcess {
+        pid,
+        executable,
+        started,
+    })
+}
+
+/// Split one `ps -o lstart=,comm=` line into its executable and start time.
+///
+/// Separated from the call so it can be tested everywhere. The alternative is
+/// a parser that only runs on one operating system in CI, which is how the
+/// `/proc` assumption survived this long.
+#[cfg(any(target_os = "macos", test))]
+fn parse_ps_line(output: &str) -> Option<(PathBuf, Option<String>)> {
+    let line = output.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let mut fields = line.split_whitespace();
+    let start: Vec<&str> = fields.by_ref().take(5).collect();
+    if start.len() < 5 {
+        return None;
+    }
+    let executable: Vec<&str> = fields.collect();
+    if executable.is_empty() {
+        return None;
+    }
+    Some((PathBuf::from(executable.join(" ")), Some(start.join(" "))))
 }
 
 #[cfg(test)]
@@ -443,5 +491,37 @@ mod tests {
         assert_eq!(ProcessKind::Editor.label(), "editor");
         assert_eq!(ProcessKind::Game.label(), "game");
         assert_eq!(ProcessKind::Worker.label(), "worker");
+    }
+
+    #[test]
+    fn a_ps_line_splits_the_start_time_from_the_path() {
+        // `ps -p <pid> -o lstart=,comm=` on macOS. Five fields of date, then
+        // whatever is left is the executable.
+        let (path, started) =
+            parse_ps_line("Sat Sep 12 08:26:00 2026 /Applications/Godot.app/x").unwrap();
+        assert_eq!(path, PathBuf::from("/Applications/Godot.app/x"));
+        assert_eq!(started.as_deref(), Some("Sat Sep 12 08:26:00 2026"));
+    }
+
+    #[test]
+    fn a_path_with_spaces_survives_the_split() {
+        let (path, _) = parse_ps_line("Sat Sep 12 08:26:00 2026 /Users/me/My Games/Godot").unwrap();
+        assert_eq!(path, PathBuf::from("/Users/me/My Games/Godot"));
+    }
+
+    #[test]
+    fn an_empty_or_short_ps_line_is_no_answer_rather_than_a_guess() {
+        assert!(parse_ps_line("").is_none());
+        // A process that has exited leaves nothing useful behind. The caller
+        // turns this into "cannot prove ownership", which refuses to stop
+        // rather than stopping the wrong thing.
+        assert!(parse_ps_line("Sat Sep 12 08:26:00 2026").is_none());
+        assert!(parse_ps_line("   \n  \n").is_none());
+    }
+
+    #[test]
+    fn the_first_non_empty_ps_line_is_the_one_used() {
+        let (path, _) = parse_ps_line("\n\nSat Sep 12 08:26:00 2026 /bin/zsh\n").unwrap();
+        assert_eq!(path, PathBuf::from("/bin/zsh"));
     }
 }
