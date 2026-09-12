@@ -165,7 +165,18 @@ const INSPECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Ask the operating system about a process.
 ///
-/// Returns `None` when the process does not exist or could not be described.
+/// Returns `None` when the process does not exist, cannot be described, or has
+/// finished but not yet been reaped.
+///
+/// That last case is not a technicality. A process this session launched and
+/// killed is a child of this process until somebody waits on it, and a child
+/// that has not been reaped is a zombie — which `ps` reports quite happily on
+/// macOS. `wait_for_exit` polls this function to decide whether a stop
+/// succeeded, so a zombie counted as alive means `aurum stop` waits out its
+/// whole timeout and then reports the process as still running, having already
+/// killed it. Linux hid the problem: `/proc/<pid>/exe` disappears for a zombie,
+/// so `inspect` answered `None` there for an unrelated reason and the tests
+/// passed on two platforms out of three.
 /// On Windows the query goes through CIM, which is the only dependency-free
 /// way to obtain a start time; `tasklist` reports a name but not a start time,
 /// and a name alone cannot defeat PID reuse.
@@ -227,17 +238,34 @@ fn inspect_windows(pid: u32) -> Option<LiveProcess> {
 /// Ask Linux about a process, through `/proc`.
 #[cfg(target_os = "linux")]
 fn inspect_unix(pid: u32) -> Option<LiveProcess> {
-    let executable = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
-    // Field 22 of /proc/<pid>/stat is the start time in clock ticks; it is
-    // fixed for the process's lifetime, which is what makes it useful here.
+    // Field 3 of /proc/<pid>/stat is the state and field 22 is the start time
+    // in clock ticks. Both follow the process name, which is the one field that
+    // can contain anything, so the split is taken from the last `)`.
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let after_name = stat.rsplit_once(')')?.1;
-    let started = after_name.split_whitespace().nth(19).map(str::to_string);
+    let mut fields = after_name.split_whitespace();
+    let state = fields.next()?.chars().next()?;
+    if finished(state) {
+        return None;
+    }
+    // Read the executable after the state check: a zombie has no `exe` link,
+    // and relying on that is what made this look correct for so long.
+    let executable = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+    let started = fields.nth(18).map(str::to_string);
     Some(LiveProcess {
         pid,
         executable,
         started,
     })
+}
+
+/// Whether a `ps` state character means the process has finished.
+///
+/// `Z` is a zombie — finished, not yet reaped. `X` is a process being torn
+/// down. Neither can be stopped or is running anything.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+fn finished(state: char) -> bool {
+    matches!(state, 'Z' | 'X' | 'x')
 }
 
 /// Ask macOS about a process, through `ps`.
@@ -253,13 +281,16 @@ fn inspect_unix(pid: u32) -> Option<LiveProcess> {
 #[cfg(target_os = "macos")]
 fn inspect_unix(pid: u32) -> Option<LiveProcess> {
     let outcome = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "lstart=,comm="])
+        .args(["-p", &pid.to_string(), "-o", "lstart=,state=,comm="])
         .run(INSPECT_TIMEOUT)
         .ok()?;
     if !outcome.success() {
         return None;
     }
-    let (executable, started) = parse_ps_line(&outcome.stdout)?;
+    let (executable, started, state) = parse_ps_line(&outcome.stdout)?;
+    if finished(state) {
+        return None;
+    }
     Some(LiveProcess {
         pid,
         executable,
@@ -267,25 +298,27 @@ fn inspect_unix(pid: u32) -> Option<LiveProcess> {
     })
 }
 
-/// Split one `ps -o lstart=,comm=` line into its executable and start time.
+/// Split one `ps -o lstart=,state=,comm=` line into its executable, start time and state.
 ///
 /// Separated from the call so it can be tested everywhere. The alternative is
 /// a parser that only runs on one operating system in CI, which is how the
 /// `/proc` assumption survived this long.
 #[cfg(any(target_os = "macos", test))]
-fn parse_ps_line(output: &str) -> Option<(PathBuf, Option<String>)> {
+fn parse_ps_line(output: &str) -> Option<(PathBuf, Option<String>, char)> {
     let line = output.lines().map(str::trim).find(|l| !l.is_empty())?;
     let mut fields = line.split_whitespace();
     let start: Vec<&str> = fields.by_ref().take(5).collect();
     if start.len() < 5 {
         return None;
     }
+    let state = fields.next()?.chars().next()?;
+    // The path is last because it is the only field that can contain a space.
     let executable: Vec<&str> = fields.collect();
     if executable.is_empty() {
         return None;
     }
     let path = PathBuf::from(executable.join(" "));
-    Some((resolve_to_a_file(&path), Some(start.join(" "))))
+    Some((resolve_to_a_file(&path), Some(start.join(" ")), state))
 }
 
 /// Turn whatever `ps` reported into a path that can be checked against the disk.
@@ -555,15 +588,17 @@ mod tests {
     fn a_ps_line_splits_the_start_time_from_the_path() {
         // `ps -p <pid> -o lstart=,comm=` on macOS. Five fields of date, then
         // whatever is left is the executable.
-        let (path, started) =
-            parse_ps_line("Sat Sep 12 08:26:00 2026 /Applications/Godot.app/x").unwrap();
+        let (path, started, state) =
+            parse_ps_line("Sat Sep 12 08:26:00 2026 S /Applications/Godot.app/x").unwrap();
         assert_eq!(path, PathBuf::from("/Applications/Godot.app/x"));
         assert_eq!(started.as_deref(), Some("Sat Sep 12 08:26:00 2026"));
+        assert_eq!(state, 'S');
     }
 
     #[test]
     fn a_path_with_spaces_survives_the_split() {
-        let (path, _) = parse_ps_line("Sat Sep 12 08:26:00 2026 /Users/me/My Games/Godot").unwrap();
+        let (path, _, _) =
+            parse_ps_line("Sat Sep 12 08:26:00 2026 S /Users/me/My Games/Godot").unwrap();
         assert_eq!(path, PathBuf::from("/Users/me/My Games/Godot"));
     }
 
@@ -574,12 +609,25 @@ mod tests {
         // turns this into "cannot prove ownership", which refuses to stop
         // rather than stopping the wrong thing.
         assert!(parse_ps_line("Sat Sep 12 08:26:00 2026").is_none());
+        assert!(parse_ps_line("Sat Sep 12 08:26:00 2026 S").is_none());
         assert!(parse_ps_line("   \n  \n").is_none());
     }
 
     #[test]
     fn the_first_non_empty_ps_line_is_the_one_used() {
-        let (path, _) = parse_ps_line("\n\nSat Sep 12 08:26:00 2026 /bin/zsh\n").unwrap();
+        let (path, _, _) = parse_ps_line("\n\nSat Sep 12 08:26:00 2026 S /bin/zsh\n").unwrap();
         assert_eq!(path, PathBuf::from("/bin/zsh"));
+    }
+
+    #[test]
+    fn a_zombie_is_finished_rather_than_alive() {
+        // The bug this pins. A process this session launched and killed stays a
+        // child until it is reaped, and `ps` reports the zombie as present, so
+        // `wait_for_exit` polled a process that had already died until its
+        // timeout ran out and then reported the stop as having failed.
+        assert!(finished('Z'));
+        assert!(finished('X'));
+        assert!(!finished('S'));
+        assert!(!finished('R'));
     }
 }
